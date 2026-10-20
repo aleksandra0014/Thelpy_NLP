@@ -1,0 +1,7 @@
+numpy
+requests
+rank-bm25
+scikit-learn
+umap-learn
+plotly
+pandas
