@@ -4,13 +4,13 @@ Oczekiwany format (jeden plik = jedna sesja):
 
 {
   "session_id": "S001",
-  "client_id": "C017",
+  "client_id": "C017",               # albo "patient_id"
   "session_at": "2026-03-14T10:00:00+01:00",
   "duration_seconds": 3120,          # opcjonalne
   "source_version": "v1",            # opcjonalne
   "turns": [
     {"turn_id": "T001", "speaker_id": "SPK0", "speaker_role": "therapist",
-     "text": "...", "start": 0.0, "end": 4.2}
+     "text": "...", "start": 0.0, "end": 4.2}     # albo "00:00:00" / "00:00:04"
   ]
 }
 
@@ -24,11 +24,25 @@ from pathlib import Path
 
 from .schema import Session, Turn
 
-REQUIRED = ("session_id", "client_id", "session_at", "turns")
+REQUIRED = ("session_id", "session_at", "turns")
+CLIENT_KEYS = ("client_id", "patient_id")   # wymagany jeden z nich
+
+
+def to_seconds(value) -> float | None:
+    """Liczba sekund albo "hh:mm:ss[.ff]" / "mm:ss" -> sekundy."""
+    if value is None or isinstance(value, (int, float)):
+        return value
+    secs = 0.0
+    for part in str(value).split(":"):
+        secs = secs * 60 + float(part)
+    return secs
 
 
 def session_from_dict(d: dict) -> Session:
-    missing = [k for k in REQUIRED if k not in d]
+    missing = [k for k in REQUIRED if d.get(k) in (None, "")]
+    client_id = next((d[k] for k in CLIENT_KEYS if d.get(k) not in (None, "")), None)
+    if client_id is None:
+        missing.append(" / ".join(CLIENT_KEYS))
     if missing:
         raise ValueError(f"Brak pól {missing} w sesji {d.get('session_id', '?')}")
 
@@ -42,15 +56,15 @@ def session_from_dict(d: dict) -> Session:
             speaker_id=str(t.get("speaker_id", "UNK")),
             speaker_role=t.get("speaker_role"),
             text=text,
-            start=t.get("start"),
-            end=t.get("end"),
+            start=to_seconds(t.get("start")),
+            end=to_seconds(t.get("end")),
         ))
     if not turns:
         raise ValueError(f"Sesja {d['session_id']} nie ma żadnych niepustych tur")
 
     return Session(
         session_id=str(d["session_id"]),
-        client_id=str(d["client_id"]),
+        client_id=str(client_id),
         session_at=d["session_at"],
         added_at=d.get("added_at") or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         duration_seconds=d.get("duration_seconds"),

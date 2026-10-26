@@ -24,7 +24,7 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 
 OLLAMA_URL = _env("OLLAMA_URL", "http://localhost:11434")
 EMBED_MODEL = _env("EMBED_MODEL", "qwen3-embedding:0.6b-q8_0")
-LLM_MODEL = _env("LLM_MODEL", "qwen3:8b")
+LLM_MODEL = _env("LLM_MODEL", "qwen3.5:4b")
 LLM_NUM_CTX = int(_env("LLM_NUM_CTX", "8192"))          # okno kontekstu Ollamy (prompt + odpowiedź)
 LLM_TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.2"))
 LLM_ANSWER_RESERVE = int(_env("LLM_ANSWER_RESERVE", "1024"))  # tokeny zostawione na odpowiedź

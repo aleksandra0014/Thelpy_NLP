@@ -51,9 +51,10 @@ def check_prompt_fits(messages: list[dict], num_ctx: int, reserve: int = config.
     return n
 
 
-def answer(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
-           url: str = config.OLLAMA_URL, temperature: float = config.LLM_TEMPERATURE,
-           num_ctx: int = config.LLM_NUM_CTX) -> str:
+def generate(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
+             url: str = config.OLLAMA_URL, temperature: float = config.LLM_TEMPERATURE,
+             num_ctx: int = config.LLM_NUM_CTX) -> dict:
+    """Like answer(), but also returns the messages and Ollama's token counts."""
     messages = build_messages(question, payloads)
     check_prompt_fits(messages, num_ctx)
 
@@ -74,4 +75,14 @@ def answer(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
                       f"the prompt was probably truncated.")
     if data.get("done_reason") == "length":
         warnings.warn(f"Answer hit the context/length limit (num_ctx={num_ctx}) and is cut off.")
-    return data["message"]["content"]
+    return {
+        "model": model,
+        "messages": messages,
+        "answer": data["message"]["content"],
+        "prompt_tokens": prompt_tokens,              # Ollama: whole prompt (system + fragments + question)
+        "answer_tokens": data.get("eval_count") or 0,
+    }
+
+
+def answer(question: str, payloads: list[dict], **kw) -> str:
+    return generate(question, payloads, **kw)["answer"]

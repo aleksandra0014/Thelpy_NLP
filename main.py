@@ -45,7 +45,7 @@ def parse_args():
     g.add_argument("--session", help="filtr: session_id")
     g.add_argument("--client", help="filtr: client_id")
     g.add_argument("--neighbors", type=int, default=0, help="dołącz N sąsiednich chunków")
-    g.add_argument("--ask", action="store_true", help="wygeneruj odpowiedź qwen3:8b")
+    g.add_argument("--ask", action="store_true", help="wygeneruj odpowiedź LLM (config.LLM_MODEL)")
     return ap.parse_args()
 
 

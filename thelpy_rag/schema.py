@@ -19,7 +19,7 @@ class Turn:
 class Session:
     session_id: str
     client_id: str
-    session_at: str                    
+    session_at: str
     turns: list[Turn]
     added_at: Optional[str] = None     
     duration_seconds: Optional[float] = None

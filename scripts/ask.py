@@ -1,4 +1,4 @@
-"""Pełny RAG: wyszukanie fragmentów + odpowiedź modelu qwen3:8b.
+"""Pełny RAG: wyszukanie fragmentów + odpowiedź modelu LLM (config.LLM_MODEL).
 
     python -m scripts.ask "Jakie strategie radzenia sobie ze stresem omawiano?" -s turns8 --client C017
 """
