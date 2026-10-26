@@ -1,0 +1,20 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest   # w badaniach przypnij konkretną wersję, np. qdrant/qdrant:v1.x.y
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"     # REST + dashboard (http://localhost:6333/dashboard)
+      - "127.0.0.1:6334:6334"     # gRPC
+    volumes:
+      - ./qdrant_storage:/qdrant/storage
+      - ./qdrant_snapshots:/qdrant/snapshots
+    environment:
+      QDRANT__SERVICE__API_KEY: "${QDRANT_API_KEY:-}"   # ustaw w .env, jeśli wystawiasz poza localhost
+      QDRANT__LOG_LEVEL: "INFO"
+    # opcjonalnie ogranicz zasoby, żeby nie konkurować z modelami o CPU/RAM:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "8"
+    #       memory: 24g
