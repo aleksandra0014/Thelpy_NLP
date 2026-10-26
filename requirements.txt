@@ -5,6 +5,7 @@ charset-normalizer==3.5.2
 click==8.5.0
 cloudpickle==3.1.2
 colorama==0.4.6
+et_xmlfile==2.0.0
 filelock==4.2.4
 fsspec==2026.9.0
 grpcio==1.85.0
@@ -24,6 +25,7 @@ llvmlite==0.50.0
 narwhals==2.27.1
 numba==0.68.0
 numpy==2.5.4
+openpyxl==3.1.5
 packaging==26.3
 pandas==3.1.0
 plotly==7.1.0

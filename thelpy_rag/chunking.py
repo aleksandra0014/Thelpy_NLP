@@ -14,13 +14,13 @@ from functools import lru_cache
 from . import config
 from .schema import Chunk, Session, Turn
 
-ROLE_LABELS = {"therapist": "Terapeuta", "client": "Klient", "patient": "Klient"}
+ROLE_LABELS = {"therapist": "Therapist", "client": "Client", "patient": "Client"}
 
 
 def render_turn(turn: Turn) -> str:
     label = ROLE_LABELS.get((turn.speaker_role or "").lower(), turn.speaker_role or turn.speaker_id)
     return f"{label}: {turn.text}"
-# Każda wypowiedź dostaje przed sobą etykietę mówiącego: Terapeuta: Jak Pani reaguje na te telefony od mamy?
+# Każda wypowiedź dostaje przed sobą etykietę mówiącego: Therapist: How do you react to those calls from your mum?
 
 
 

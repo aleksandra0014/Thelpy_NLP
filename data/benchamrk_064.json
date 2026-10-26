@@ -1,0 +1,296 @@
+{
+  "meta": {
+    "session_id": "transcript_064",
+    "title": "Ricky and Ian (MI, reducing drug use)",
+    "language_of_source": "en",
+    "language_of_benchmark": "en",
+    "evidence_format": "start timestamps of utterances from the transcript (hh:mm:ss); a range 'a–b' means a sequence of utterances",
+    "notes_on_source": [
+      "The transcript contains only text and utterance start times - no end times - so pause lengths and speech rate MUST be computed from the audio or from ASR with word-level timestamps.",
+      "Timestamps have minor discontinuities (e.g. 00:23:50 appears before 00:23:41; one long patient turn spans 00:06:25 to 00:08:15). Do not compute pauses from them without checking against the recording.",
+      "The patient says 'I still live in Palmy' (00:06:25), but from context he lives in Auckland and Palmy (Palmerston North) is his hometown - likely a transcription or speech slip. A summary should not claim he lives in Palmy.",
+      "'P' means methamphetamine - confirmed by the therapist at 00:05:17. The patient also says 'I smoke a little bit' without naming the substance (00:04:46); this must not be filled in (e.g. 'marijuana')."
+    ]
+  },
+
+  "key_facts": [
+    {
+      "id": "F01",
+      "importance": "high",
+      "fact": "He came because friends staged an intervention about 2-3 weeks earlier; Ricky was first annoyed/shocked, then decided talking 'can't hurt'; he found the service himself via an internet search.",
+      "evidence": ["00:00:32", "00:01:40", "00:02:17"]
+    },
+    {
+      "id": "F02",
+      "importance": "high",
+      "fact": "Ricky does not identify with the 'extreme' cases from movies (people who get an intervention); he did not think he was at a point requiring one, but gives his friends the benefit of the doubt and wants to check whether they are right.",
+      "evidence": ["00:02:29–00:03:15", "00:03:36–00:04:14"]
+    },
+    {
+      "id": "F03",
+      "importance": "high",
+      "fact": "Substances used: methamphetamine ('P') a couple of times a week; less often 'smoke' (substance unspecified) and 'party pills' on weekends. When asked about frequency, Ricky admits it sounds like a lot, though it does not feel like it.",
+      "evidence": ["00:04:26–00:05:20", "00:14:36–00:15:04"]
+    },
+    {
+      "id": "F04",
+      "importance": "high",
+      "fact": "Use extends beyond weekends: on weekdays (e.g. Tuesday/Wednesday) he sometimes uses with someone or alone. Near the end of the session Ricky admits that using alone on a Wednesday 'doesn't sound that good'.",
+      "evidence": ["00:12:35", "00:29:06"]
+    },
+    {
+      "id": "F05",
+      "importance": "high",
+      "fact": "Benefits: feeling happy, excited, loved and cared for among people, a predictable 'instant' good feeling; use is tied to weekend social life.",
+      "evidence": ["00:08:15", "00:11:10"]
+    },
+    {
+      "id": "F06",
+      "importance": "medium",
+      "fact": "Background: about 3 years ago he moved from Palmerston North to Auckland (partly to get away from his parents and the Palmy lifestyle), discovered the gay scene (Family Bar), where he felt accepted; drugs were present from the start as part of that scene.",
+      "evidence": ["00:06:01", "00:09:35", "00:26:55–00:27:23"]
+    },
+    {
+      "id": "F07",
+      "importance": "high",
+      "fact": "Financial problems: last year he had a well-paid regular acting job and 'blew' the money; now he works part-time in a cafe, sometimes borrows money and needs help with rent; he does not want to be the person who doesn't pay rent.",
+      "evidence": ["00:16:34", "00:17:08", "00:25:19–00:25:44"]
+    },
+    {
+      "id": "F08",
+      "importance": "high",
+      "fact": "Acting career: Ricky wants acting to be his job ('sick of cafes'). He allows that use may have hurt some auditions and may affect his appearance/tiredness, but expresses this tentatively ('maybe', 'could be'). Lack of money limits the courses he takes.",
+      "evidence": ["00:18:42–00:18:54", "00:19:24–00:20:05", "00:24:08–00:25:16"]
+    },
+    {
+      "id": "F09",
+      "importance": "high",
+      "fact": "Friends/flatmates set a condition: Ricky must look into it or they can't hang out anymore. For Ricky that would be a problem because 'what have I got' without them. Some of the people involved in the intervention use themselves.",
+      "evidence": ["00:21:12–00:21:45", "00:22:57–00:23:21"]
+    },
+    {
+      "id": "F10",
+      "importance": "medium",
+      "fact": "Ricky is critical of 'judgy' friends from outside the scene and believes that with sensible use the risk is low (you'd have to take a 'stupid' amount to die or end up in hospital). This is his belief, not a fact established in the session.",
+      "evidence": ["00:21:46–00:22:57"]
+    },
+    {
+      "id": "F11",
+      "importance": "high",
+      "fact": "Substances are constantly available in the scene and most people take something (not necessarily meth); Ricky had not imagined the scene without drugs, but concedes other parts of it must exist.",
+      "evidence": ["00:25:41–00:27:37"]
+    },
+    {
+      "id": "F12",
+      "importance": "high",
+      "fact": "The therapist suggests considering options: gay groups/clubs/activities during the week or parties where meth is not dominant; stresses it is not about giving everything up but about having more control. Ricky responds agreeably ('Yeah', 'Yep') and talks about needing 'something to look forward to' midweek - with no concrete commitment.",
+      "evidence": ["00:27:50–00:28:46", "00:29:54–00:30:57"]
+    },
+    {
+      "id": "F13",
+      "importance": "medium",
+      "fact": "The therapist deliberately sets labels aside, focusing on what Ricky thinks and what his options are rather than on a diagnosis.",
+      "evidence": ["00:23:42"]
+    }
+  ],
+
+  "keyphrases_and_topics": {
+    "topics_required": [
+      {"topic": "friends' intervention / external motivation", "accepted_variants": ["intervention", "friends concerned", "friends sat him down", "pushed by friends"]},
+      {"topic": "methamphetamine and other substance use", "accepted_variants": ["meth", "P", "methamphetamine", "party pills", "substances", "drug use"]},
+      {"topic": "ambivalence / low readiness for change", "accepted_variants": ["ambivalence", "doesn't feel like a problem", "defensiveness", "benefit of the doubt", "not sure it applies to him"]},
+      {"topic": "gay scene and the social function of use", "accepted_variants": ["gay scene", "belonging", "acceptance", "party scene", "Auckland"]},
+      {"topic": "financial consequences", "accepted_variants": ["money", "rent", "borrowing", "spent his earnings"]},
+      {"topic": "acting career", "accepted_variants": ["acting", "auditions", "acting career", "career goals"]},
+      {"topic": "relationships with friends and flatmates", "accepted_variants": ["friends", "flatmates", "ultimatum", "fear of losing friends"]},
+      {"topic": "alternatives and a first step", "accepted_variants": ["gay groups", "weekday activities", "less meth-centred social options", "something to look forward to"]}
+    ],
+    "keyphrases_acceptable": [
+      "weekday / solo use",
+      "'sounds like a lot but doesn't feel like a lot'",
+      "doesn't want to lose his friends",
+      "concern about his acting career",
+      "not about giving things up but about control",
+      "need for midweek activities"
+    ],
+    "unacceptable_labels": [
+      "methamphetamine addiction (as a diagnosis)",
+      "substance use disorder",
+      "depression / anxiety (not mentioned in the session)",
+      "Ricky decided to stop using"
+    ]
+  },
+  "questions": [
+    {
+      "id": "Q01", "type": "local_fact",
+      "question": "How did Ricky end up coming to this session?",
+      "required_info": ["friends' intervention 2-3 weeks earlier", "initial annoyance/shock, then deciding it 'can't hurt'", "he found the service himself online"],
+      "evidence": ["00:00:32", "00:01:40", "00:02:17"],
+      "forbidden_additions": ["referral by a court, doctor or employer", "Ricky himself recognised a serious problem"]
+    },
+    {
+      "id": "Q02", "type": "local_fact",
+      "question": "Which substances does Ricky use and how often?",
+      "required_info": ["methamphetamine ('P') about a couple of times a week", "'smoke' less often, substance not specified", "'party pills' sometimes on weekends"],
+      "evidence": ["00:04:36–00:05:20"],
+      "forbidden_additions": ["daily use", "marijuana (not specified)", "injecting", "alcohol as the main problem"]
+    },
+    {
+      "id": "Q03", "type": "scattered_information",
+      "question": "What negative consequences of use came up across the whole session?",
+      "required_info": ["financial problems (spent his earnings, borrowing, help with rent)", "possible effect on auditions", "doubts about appearance/tiredness", "friends' and flatmates' ultimatum", "fewer courses because of lack of money"],
+      "min_required_for_pass": 4,
+      "evidence": ["00:16:34–00:17:58", "00:18:42", "00:19:24–00:20:05", "00:21:12", "00:25:00"],
+      "forbidden_additions": ["loss of housing", "medically diagnosed health problems", "legal problems"]
+    },
+    {
+      "id": "Q04", "type": "scattered_information",
+      "question": "What benefits of use did Ricky mention?",
+      "required_info": ["feeling happy and excited", "being surrounded by people who 'care about and love' him", "certainty of an instant good feeling", "connection with fun and social life"],
+      "min_required_for_pass": 3,
+      "evidence": ["00:08:15", "00:11:10", "00:22:40"],
+      "forbidden_additions": ["uses to cope with trauma", "uses because of depression"]
+    },
+    {
+      "id": "Q05", "type": "relations",
+      "question": "How does Ricky connect his substance use to the gay scene in Auckland?",
+      "required_info": ["the scene gave him acceptance and belonging", "drugs were present from the start", "most people take something (not necessarily meth)", "he finds it hard to imagine the scene without it, but concedes other parts exist", "use already extends beyond that scene (weekdays, alone)"],
+      "min_required_for_pass": 4,
+      "evidence": ["00:06:50", "00:11:10", "00:12:16–00:12:35", "00:26:14–00:27:37"],
+      "forbidden_additions": ["the scene forces people to use", "use is entirely independent of the scene"]
+    },
+    {
+      "id": "Q06", "type": "relations",
+      "question": "How does Ricky link his acting career with his meth use and money?",
+      "required_info": ["he wants acting to be his job", "he allows that use may have hurt some auditions (tentatively)", "he spent the money from the role, current income is lower, fewer courses", "he states this cautiously, not as a certainty"],
+      "evidence": ["00:16:34", "00:18:42–00:18:54", "00:24:08–00:25:16"],
+      "forbidden_additions": ["he lost a role because of drugs", "he clearly admitted that use ruined his career"]
+    },
+    {
+      "id": "Q07", "type": "chronology",
+      "question": "Did the way Ricky describes his use change during the session?",
+      "required_info": ["at the start: 'a bit of P now and again', doesn't feel like a lot or out of control, defensive", "when asked about frequency: surprised it 'sounds shocking'", "later: starts noticing effects (money, appearance, auditions)", "near the end: using alone midweek 'doesn't sound that good'", "no declaration of stopping"],
+      "evidence": ["00:04:36", "00:05:20", "00:14:36–00:15:04", "00:19:59–00:20:05", "00:29:06"],
+      "forbidden_additions": ["Ricky decided to stop", "Ricky remained completely convinced he has no problem"]
+    },
+    {
+      "id": "Q08", "type": "chronology",
+      "question": "How did Ricky's attitude toward the friends who staged the intervention change?",
+      "required_info": ["initially annoyed/shocked", "then gives them the benefit of the doubt and admits they may be right", "later criticises the 'judgy' friends from outside the scene", "their ultimatum matters to him because he fears losing them"],
+      "evidence": ["00:00:32", "00:03:36–00:04:14", "00:21:46–00:22:57", "00:21:12–00:21:45"],
+      "forbidden_additions": ["he cut off his friends", "none of the friends use any substances (some do)"]
+    },
+    {
+      "id": "Q09", "type": "speaker_and_uncertainty",
+      "question": "Did Ricky confirm the therapist's interpretation that drugs are becoming a more important part of his life?",
+      "required_info": ["the therapist suggested it at 00:13:30", "Ricky answered tentatively ('Mm. Maybe. I suppose I hadn't really thought about it until recently')", "neither a full confirmation nor a denial; later he admitted weekday use surprised him"],
+      "evidence": ["00:13:30–00:14:07", "00:29:06"],
+      "forbidden_additions": ["Ricky clearly confirmed it", "Ricky was the first to put it this way"]
+    },
+    {
+      "id": "Q10", "type": "speaker_and_uncertainty",
+      "question": "Did Ricky admit that meth has hurt his chances in acting?",
+      "required_info": ["the therapist suggested the link (00:18:23, 00:24:52)", "Ricky answered 'could have been', 'maybe', 'yeah, it could be' - a possibility, not a confirmation", "he also mentions the general instability of the profession"],
+      "evidence": ["00:18:23–00:18:54", "00:24:52–00:24:57", "00:18:08"],
+      "forbidden_additions": ["Ricky stated that he doesn't get roles because of drugs"]
+    },
+    {
+      "id": "Q11", "type": "paraphrase",
+      "question": "What might make it hard for Ricky to cut down his use?",
+      "required_info": ["substances are constantly available in his social scene", "he finds it hard to imagine that scene without drugs", "he doesn't feel the problem is urgent or out of control", "he uses midweek to deal with the 'midweek slump' and lack of company", "he dismisses opinions of 'judgy' friends"],
+      "min_required_for_pass": 3,
+      "evidence": ["00:15:04", "00:26:06–00:27:23", "00:29:54", "00:21:46–00:22:57"],
+      "forbidden_additions": ["Ricky doesn't want any change at all", "physical dependence"]
+    },
+    {
+      "id": "Q12", "type": "paraphrase",
+      "question": "What possible steps were mentioned and how did Ricky react?",
+      "required_info": ["therapist: groups, clubs, activities (gay) during the week not centred on meth", "therapist: not about giving up everything but about more control", "Ricky: agrees he needs something to look forward to midweek", "no concrete commitment or date"],
+      "evidence": ["00:27:50–00:28:46", "00:29:54–00:30:57"],
+      "forbidden_additions": ["Ricky signed up for a group", "a specific plan or date was agreed"]
+    },
+    {
+      "id": "Q13", "type": "unanswerable",
+      "question": "What medications does Ricky take and does he have any psychiatric diagnoses?",
+      "required_info": ["the system should state that the material contains no such information"],
+      "evidence": [],
+      "forbidden_additions": ["any specific medication or diagnosis"]
+    },
+    {
+      "id": "Q14", "type": "unanswerable",
+      "question": "Has Ricky previously had therapy or treatment for substance use?",
+      "required_info": ["no information; Ricky only says he has not been to this place before (00:00:12–00:00:13), which does not rule out treatment elsewhere"],
+      "evidence": ["00:00:12"],
+      "forbidden_additions": ["'he has never had any therapy'", "'he had therapy before'"]
+    },
+    {
+      "id": "Q15", "type": "unanswerable",
+      "question": "How much methamphetamine does Ricky take per occasion and how does he take it?",
+      "required_info": ["no information about dose or route of use"],
+      "evidence": [],
+      "forbidden_additions": ["any dose or route of administration"]
+    },
+    {
+      "id": "Q16", "type": "false_premise",
+      "question": "Why did Ricky lose his acting job because of methamphetamine?",
+      "required_info": ["reject the premise: Ricky spoke about less frequent work and 'the life of an actor'; a possible effect on auditions is only his speculation", "he never stated that he lost a job because of drugs"],
+      "evidence": ["00:17:08", "00:18:08", "00:18:42–00:18:54"],
+      "forbidden_additions": ["giving a cause of job loss as fact"]
+    },
+    {
+      "id": "Q17", "type": "false_premise",
+      "question": "Why did Ricky decide to quit drugs completely?",
+      "required_info": ["reject the premise: Ricky did not declare he would stop; the therapist explicitly said it is not about giving up everything", "Ricky only expressed openness to considering options"],
+      "evidence": ["00:28:27", "00:29:06", "00:30:57"],
+      "forbidden_additions": ["describing a motivation to quit as fact"]
+    }
+  ],
+
+  "audio_questions": {
+    "note": "Reference answers are computed automatically from the recording/ASR (not from the transcript). Record the measurement method, tool version and tolerance. No measurements are available for this session yet, so the 'gold' fields are to be filled in.",
+    "questions": [
+      {
+        "id": "A01", "type": "audio",
+        "question": "In which of Ricky's utterances was the speech rate lowest?",
+        "gold": "TODO: top-3 utterances by words/s (excluding pauses) - give timestamps",
+        "scoring": "hit if the answer points to utterances from the top-3 (tolerance +/- 1 rank position); numbers not coming from the measurements = error"
+      },
+      {
+        "id": "A02", "type": "text_plus_audio",
+        "question": "What topics did the segments with the longest pauses concern?",
+        "gold": "TODO: map the 3 longest pauses in Ricky's utterances to topics from key_facts (candidates to verify: money 00:16:34–00:17:08, effect on auditions 00:18:42–00:19:24, friends' ultimatum 00:21:12–00:21:45)",
+        "scoring": "correct link between the measured pause and the segment topic; naming a topic without grounding in the measurement = error"
+      },
+      {
+        "id": "A03", "type": "audio_unanswerable",
+        "question": "Did Ricky's voice tremble or did he cry during the session?",
+        "gold": "The system should not assert this from the transcript alone; acceptable only if a matching acoustic feature exists in the measurements, and even then without inferring emotion. The transcript contains only annotations: throat clearing and coughing (00:10:46, 00:15:04, 00:29:06) and the therapist's chuckle (00:18:18).",
+        "forbidden_additions": ["Ricky was nervous/sad as a fact", "Ricky cried"]
+      },
+      {
+        "id": "A04", "type": "audio_text_annotations",
+        "question": "Are there non-verbal sounds in Ricky's utterances during the session?",
+        "required_info": ["yes: throat clearing (00:10:46, 00:15:04) and a cough (00:29:06) marked in the transcript"],
+        "evidence": ["00:10:46", "00:15:04", "00:29:06"],
+        "scoring": "an answer based solely on the text annotations is correct; guessing emotions from the sounds = error"
+      }
+    ]
+  },
+
+  "pitfalls_for_summaries": [
+    "Do not attribute the therapist's statements to Ricky or vice versa (e.g. 'meth may hinder his career' is the therapist's statement; Ricky only tentatively agreed).",
+    "Present Ricky's beliefs (e.g. 'you'd have to take a stupid amount to die') as his opinion, not as fact.",
+    "Do not add diagnostic labels - the therapist explicitly sets them aside.",
+    "Do not equate 'smoke' with a specific substance.",
+    "Do not claim Ricky lives in Palmerston North.",
+    "Do not treat agreement such as 'Yeah' to the therapist's suggestions as a commitment to act."
+  ],
+
+  "scoring_guidance": {
+    "answerable_questions": "Score coverage of 'required_info' (0/0.5/1 per item) minus penalties for 'forbidden_additions'; apply 'min_required_for_pass' where given.",
+    "unanswerable_and_false_premise": "1 point for clearly stating the information is missing or rejecting the premise; 0 for guessing; optionally +0.5 for pointing out what the material does say on the topic.",
+    "evidence": "Score separately whether the cited/indicated passages overlap with the 'evidence' list (e.g. recall@k at utterance level).",
+    "summary": "For summaries, score coverage of facts F01-F13 (priority: 'high'), absence of unacceptable labels, and correct speaker attribution.",
+    "multiple_valid_answers": "Reference answers are stored as sets of required information rather than a single sentence - accept any correct wording."
+  }
+}
