@@ -4,6 +4,9 @@ Before ingest every session file gets topics for every turn (saved in data/with_
 file is not changed). Then every chunk gets the topics of its turns in its payload.
 
 Examples:
+  # only ingest (no question)
+  python topics_main.py --file data/annomi_64.json --chunking turns --n-turns 8 --recreate
+
   # window of 8 turns, hybrid, answer from the LLM with topics in the prompt
   python topics_main.py --file data/annomi_64.json --chunking turns --n-turns 8 --query "What drugs does he use?" --ask
 
@@ -52,12 +55,12 @@ def parse_args():
 
 
 def read_questions(args):
-    """Return the questions from --query and --questions."""
+    """Return the questions from --query and --questions (none is fine when only ingesting)."""
     questions = list(args.query)
     if args.questions:
         with open(args.questions, encoding="utf-8") as file:
             questions = questions + [line.strip() for line in file if line.strip()]
-    if not questions:
+    if not questions and args.skip_ingest:
         raise SystemExit("Give --query or --questions")
     return questions
 

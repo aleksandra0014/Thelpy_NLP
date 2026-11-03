@@ -87,15 +87,20 @@ def topic_condition(topic):
     return models.Filter(should=[by_topic, by_sub])
 
 
+def with_topic(found, topic):
+    """Return the filter found (may be None) that also requires the topic or subtopic."""
+    condition = topic_condition(topic)
+    if found is None:
+        return models.Filter(must=[condition])
+    return models.Filter(must=list(found.must or []) + [condition])
+
+
 def build_filter_with_topics(*args, **kwargs):
     """Build the thelpy_rag filter and, when a topic is chosen, also require that topic."""
     found = original["build_filter"](*args, **kwargs)
     if not state["topic"]:
         return found
-    condition = topic_condition(state["topic"])
-    if found is None:
-        return models.Filter(must=[condition])
-    return models.Filter(must=list(found.must or []) + [condition])
+    return with_topic(found, state["topic"])
 
 
 def add_payload_indexes():

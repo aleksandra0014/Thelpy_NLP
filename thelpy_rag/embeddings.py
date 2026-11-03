@@ -29,8 +29,10 @@ class OllamaEmbedder:
         return self._embed(texts)
 
     def embed_query(self, query: str, instruction: str = config.QUERY_INSTRUCTION) -> list[float]:
-        """Zapytanie — z instrukcją w formacie wymaganym przez Qwen3-Embedding."""
-        return self._embed([f"Instruct: {instruction}\nQuery: {query}"])[0]
+        """Zapytanie — Qwen3-Embedding wymaga instrukcji, bge-m3 embeduje surowy tekst."""
+        if "qwen" in self.model.lower():
+            query = f"Instruct: {instruction}\nQuery: {query}"
+        return self._embed([query])[0]
 
     def dimension(self) -> int:
         return len(self._embed(["test"])[0])

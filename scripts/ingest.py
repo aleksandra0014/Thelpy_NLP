@@ -3,6 +3,7 @@
     python -m scripts.ingest data/sessions/
     python -m scripts.ingest data/sessions/S001.json -s turns4 fixed256
     python -m scripts.ingest data/sessions/ --dry-run      # tylko statystyki chunków, bez zapisu
+    python -m scripts.ingest data/annomi_64.json -s turns8 --topics   # z tematami w payloadzie (thelpy_topics)
 
 Ponowne wgranie tej samej sesji najpierw usuwa jej stare chunki, więc poprawiona
 transkrypcja (nowe `source_version`) zastępuje poprzednią zamiast się dublować.
@@ -25,11 +26,21 @@ def main():
                     choices=list(config.STRATEGIES))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--show", type=int, default=0, help="przy --dry-run: wypisz N pierwszych chunków")
+    ap.add_argument("--topics", action="store_true",
+                    help="dodaj tematy do chunków (sesje są najpierw anotowane do data/with_topics/)")
     args = ap.parse_args()
 
     files = iter_session_files(args.paths)
     if not files:
         raise SystemExit("Nie znaleziono plików .json")
+    load, chunk = load_session, chunk_session
+    if args.topics:
+        from thelpy_topics import integration
+        from thelpy_topics.annotate import annotate_files
+
+        files = annotate_files(files)
+        integration.add_payload_indexes()
+        load, chunk = integration.load_session_with_topics, integration.chunk_session_with_topics
     if not get_tokenizer().exact:
         print("UWAGA: brak tokenizera modelu — rozmiary w tokenach są przybliżone.")
 
@@ -38,10 +49,10 @@ def main():
     dim = None
 
     for path in files:
-        session = load_session(path)
+        session = load(path)
         print(f"\n{session.session_id} ({len(session.turns)} tur, wersja {session.source_version})")
         for s in args.strategies:
-            chunks = chunk_session(session, s)
+            chunks = chunk(session, s)
             sizes = [c.n_tokens for c in chunks]
             print(f"  {s:16s} chunków: {len(chunks):4d}   tokeny: śr. {statistics.mean(sizes):.0f}, "
                   f"min {min(sizes)}, max {max(sizes)}")
@@ -55,6 +66,8 @@ def main():
                 dim = dim or embedder.dimension()
                 create_collection(client, name, dim)
                 print(f"    utworzono kolekcję {name}")
+            elif args.topics:
+                integration.ensure_indexes(client, name)  # kolekcja sprzed tematów: dołóż indeksy
 
             texts = [c.text for c in chunks]
             dense = embedder.embed_documents(texts)

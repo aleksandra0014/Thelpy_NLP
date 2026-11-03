@@ -5,6 +5,11 @@ odpowiedź modelu oraz liczbę tokenów pytania i odpowiedzi.
 
     python -m scripts.ask_session data/annomi_64.json "Why did Ricky come to therapy?"
     python -m scripts.ask_session data/annomi_64.json "What drugs does he use?" --skip-ingest
+
+Z tematami (thelpy_topics): --topics wgrywa sesję z tematami i pokazuje je LLM-owi,
+--topic szuka tylko w chunkach z tym tematem albo podtematem (klucz z thelpy_topics/taxonomy.py).
+
+    python -m scripts.ask_session data/annomi_64.json "What does he say about his friends?" --skip-ingest --topic friends
 """
 import argparse
 import textwrap
@@ -32,7 +37,17 @@ def main():
     ap.add_argument("-k", type=int, default=5, help="liczba fragmentów przekazanych do LLM")
     ap.add_argument("--model", default=config.LLM_MODEL)
     ap.add_argument("--skip-ingest", action="store_true", help="sesja jest już w kolekcji")
+    ap.add_argument("--topics", action="store_true", help="wgraj sesję z tematami i pokaż tematy LLM-owi")
+    ap.add_argument("--topic", help="szukaj tylko w chunkach z tym tematem/podtematem, np. social, friends "
+                                    "(kolekcja musi być wgrana z --topics; włącza --topics)")
     args = ap.parse_args()
+
+    topics = args.topics or bool(args.topic)
+    if topics:
+        from thelpy_topics import integration
+        from thelpy_topics.annotate import annotate_files
+
+        integration.enable_topics()
 
     session = load_session(args.file)
     strategy = resolve_strategy("turns", n_turns=args.n_turns, overlap_turns=args.overlap_turns)
@@ -40,17 +55,27 @@ def main():
     client, embedder = get_client(), OllamaEmbedder()
 
     if not args.skip_ingest:
-        ingest([args.file], strategy, client=client, embedder=embedder)
+        files = [str(path) for path in annotate_files([args.file])] if topics else [args.file]
+        ingest(files, strategy, client=client, embedder=embedder)
+        if topics:
+            integration.ensure_indexes(client, collection)
 
     # --- retrieval (dense, tylko ta sesja) ---
     r = Retriever(client, embedder)
-    hits = r.search(collection, args.question, "dense", args.k, build_filter(session_id=session.session_id))
+    flt = build_filter(session_id=session.session_id)
+    if args.topic:
+        flt = integration.with_topic(flt, args.topic)
+    hits = r.search(collection, args.question, "dense", args.k, flt)
 
-    header(f"RETRIEVAL  dense | {collection} | top {args.k}")
+    header(f"RETRIEVAL  dense | {collection} | top {args.k}" + (f" | topic={args.topic}" if args.topic else ""))
+    if not hits and args.topic:
+        print(f"\nBrak chunków z tematem '{args.topic}' (kolekcja wgrana z --topics? klucz z taxonomy.py?)")
     for i, h in enumerate(hits, 1):
         p = h.payload
         print(f"\n{i}. cosine={h.score:.4f}  chunk={p['chunk_index']}  {p.get('turn_range')}  "
               f"[{p.get('start_seconds')}–{p.get('end_seconds')} s]  tokeny={p.get('n_tokens')}")
+        if topics:
+            print(f"   ({integration.topic_note(p) or 'brak tematu'})")
         print(textwrap.indent(p["text"], "   "))
 
     # --- LLM ---
