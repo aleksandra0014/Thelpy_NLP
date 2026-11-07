@@ -634,7 +634,7 @@ Wszystkie w [topic_config.py](topic_config.py). Zmiana któregokolwiek → zmian
 ## 9. Komendy
 
 ```bash
-pip install -r requirements_topics.txt
+pip install -r requirements.txt   # zawiera sentence-transformers
 
 # tylko anotacja (zapis do data/with_topics/)
 python -m thelpy_topics.annotate data/annomi_64.json

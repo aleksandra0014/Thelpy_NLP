@@ -18,3 +18,43 @@ services:
     #     limits:
     #       cpus: "8"
     #       memory: 24g
+
+  backend:
+    build:
+      context: .
+      args:                                # wersja bez GPU: TORCH_INDEX=cpu TORCH_VERSION=2.15.0
+        TORCH_INDEX: "${TORCH_INDEX:-cu128}"   # i usuń sekcję deploy poniżej
+        TORCH_VERSION: "${TORCH_VERSION:-2.11.0}"
+    image: thelpy-backend:latest
+    container_name: thelpy-backend
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+    # GPU (NVIDIA Container Toolkit) — używa go model tematów (sentence-transformers);
+    # embeddingi i LLM liczy Ollama, poza tym kontenerem
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Sieć hosta: kontener widzi Qdranta (port opublikowany na 127.0.0.1) i Ollamę na localhost tak samo
+    # jak skrypty uruchamiane lokalnie. Potrzebne w WSL z networkingMode=mirrored, gdzie Ollama działa
+    # na Windowsie i nie jest osiągalna przez host.docker.internal. Na serwerze z Ollamą w kontenerze
+    # można zamiast tego użyć zwykłej sieci: ports: ["127.0.0.1:8000:8000"], QDRANT_URL=http://qdrant:6333.
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    environment:                          # nadpisuje wartości z .env
+      QDRANT_URL: "${BACKEND_QDRANT_URL:-http://127.0.0.1:6333}"
+      OLLAMA_URL: "${BACKEND_OLLAMA_URL:-http://localhost:11434}"
+      THELPY_API_HOST: "${THELPY_API_HOST:-127.0.0.1}"   # tylko localhost: API czyta pliki z data/ i nie ma logowania
+      THELPY_API_PORT: "${THELPY_API_PORT:-8000}"
+    volumes:
+      - ./data:/app/data                  # sesje, data/uploads, data/with_topics, data/topic_cache, wyniki benchmarków
+      - hf_cache:/cache/huggingface       # tokenizer BAAI/bge-m3 i model tematów (pobierane przy pierwszym użyciu)
+
+volumes:
+  hf_cache:

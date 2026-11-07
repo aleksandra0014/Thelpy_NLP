@@ -29,10 +29,12 @@ def format_context(payloads: list[dict]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def build_messages(question: str, payloads: list[dict]) -> list[dict]:
+def build_messages(question: str, payloads: list[dict], formatter=None) -> list[dict]:
+    """formatter: optional payloads -> context text (default: format_context, e.g. with topics)."""
+    context = (formatter or format_context)(payloads)
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Fragments:\n\n{format_context(payloads)}\n\nQuestion: {question}"},
+        {"role": "user", "content": f"Fragments:\n\n{context}\n\nQuestion: {question}"},
     ]
 
 
@@ -53,9 +55,9 @@ def check_prompt_fits(messages: list[dict], num_ctx: int, reserve: int = config.
 
 def generate(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
              url: str = config.OLLAMA_URL, temperature: float = config.LLM_TEMPERATURE,
-             num_ctx: int = config.LLM_NUM_CTX) -> dict:
+             num_ctx: int = config.LLM_NUM_CTX, formatter=None) -> dict:
     """Like answer(), but also returns the messages and Ollama's token counts."""
-    messages = build_messages(question, payloads)
+    messages = build_messages(question, payloads, formatter)
     check_prompt_fits(messages, num_ctx)
 
     r = requests.post(f"{url.rstrip('/')}/api/chat", timeout=600, json={

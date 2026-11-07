@@ -5,4 +5,5 @@ logs/
 qdrant_storage/
 qdrant_snapshots/
 *.pyc
+data/data/uploads/
 data/

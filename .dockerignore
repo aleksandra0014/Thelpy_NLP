@@ -1,0 +1,14 @@
+.git
+.venv
+venv
+**/__pycache__
+*.pyc
+.env
+data
+logs
+qdrant_storage
+qdrant_snapshots
+tests_scripts
+tests_topics
+*.xlsx
+*.html

@@ -67,38 +67,26 @@ def format_sheet(ws, df: pd.DataFrame) -> None:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("benchmark", help="plik JSON benchmarku (sekcja 'questions')")
-    ap.add_argument("--session", required=True, help="session_id w Qdrancie, np. 64")
-    ap.add_argument("-s", "--strategy", default="turns8", choices=list(config.STRATEGIES))
-    ap.add_argument("-m", "--mode", default="dense", choices=["dense", "bm25", "hybrid"])
-    ap.add_argument("-k", type=int, default=5)
-    ap.add_argument("--context-order", default="score", choices=["score", "chrono"],
-                    help="kolejność fragmentów w prompcie: od najwyższego score albo po chunk_index")
-    ap.add_argument("--model", default=config.LLM_MODEL)
-    ap.add_argument("--out")
-    args = ap.parse_args()
-
-    with open(args.benchmark, encoding="utf-8") as f:
-        questions = json.load(f)["questions"]
-    collection = config.collection_name(args.strategy)
-    out = Path(args.out or f"benchmark_{args.session}_{args.strategy}_{args.mode}_k{args.k}_{args.context_order}.xlsx")
-
-    r = Retriever(get_client())
-    flt = build_filter(session_id=args.session)
+def run_benchmark(questions: list[dict], session: str, strategy: str = "turns8", mode: str = "dense",
+                  k: int = 5, context_order: str = "score", model: str = config.LLM_MODEL,
+                  retriever: Retriever | None = None, flt=None, formatter=None,
+                  log=print) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Pytania -> RAG -> (wyniki, fragmenty, podsumowanie). flt nadpisuje filtr sesji (np. z tematem)."""
+    collection = config.collection_name(strategy)
+    r = retriever or Retriever(get_client())
+    flt = flt if flt is not None else build_filter(session_id=session)
     results, fragments = [], []
 
     for n, q in enumerate(questions, 1):
-        print(f"{q['id']} [{n}/{len(questions)}] {q['question']}", flush=True)
-        hits = r.search(collection, q["question"], args.mode, args.k, flt)
+        log and log(f"{q['id']} [{n}/{len(questions)}] {q['question']}")
+        hits = r.search(collection, q["question"], mode, k, flt)
         if not hits:
-            raise SystemExit(f"Brak wyników: sesja {args.session} nie jest w kolekcji {collection}?")
+            raise LookupError(f"Brak wyników: sesja {session} nie jest w kolekcji {collection}?")
 
         contexts = [h.payload for h in hits]
-        if args.context_order == "chrono":
+        if context_order == "chrono":
             contexts.sort(key=lambda p: p["chunk_index"])
-        res = generate(q["question"], contexts, model=args.model)
+        res = generate(q["question"], contexts, model=model, formatter=formatter)
 
         evidence = q.get("evidence") or []
         ev_ranges = [parse_evidence(e) for e in evidence]
@@ -132,27 +120,59 @@ def main():
 
     df = pd.DataFrame(results)
     frag = pd.DataFrame(fragments)
-    cfg = pd.DataFrame([
-        ("benchmark", args.benchmark), ("session_id", args.session), ("collection", collection),
-        ("mode", args.mode), ("k", args.k), ("context_order", args.context_order),
-        ("llm_model", args.model), ("embed_model", config.EMBED_MODEL),
-        ("run_at", datetime.now().isoformat(timespec="seconds")),
-    ], columns=["parameter", "value"])
-
-    by_type = df.groupby("type", sort=False).agg(
+    by_type = df.groupby("type", sort=False, dropna=False).agg(
         n=("id", "count"), evidence_hit=("evidence_hit", "mean"), evidence_recall=("evidence_recall", "mean"),
         prompt_tokens=("prompt_tokens", "sum"), answer_tokens=("answer_tokens", "sum")).reset_index()
     total = pd.DataFrame([{"type": "ALL", "n": len(df), "evidence_hit": df["evidence_hit"].mean(),
                            "evidence_recall": df["evidence_recall"].mean(),
                            "prompt_tokens": df["prompt_tokens"].sum(), "answer_tokens": df["answer_tokens"].sum()}])
     summary = pd.concat([by_type, total], ignore_index=True).round(3)
+    return df, frag, summary
 
+
+def config_frame(**params) -> pd.DataFrame:
+    rows = list(params.items()) + [("embed_model", config.EMBED_MODEL),
+                                   ("run_at", datetime.now().isoformat(timespec="seconds"))]
+    return pd.DataFrame(rows, columns=["parameter", "value"])
+
+
+def write_excel(out: Path, df: pd.DataFrame, frag: pd.DataFrame, cfg: pd.DataFrame, summary: pd.DataFrame) -> Path:
+    out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(out, engine="openpyxl") as xw:
         for name, d in [("wyniki", df), ("fragmenty", frag), ("konfiguracja", cfg), ("podsumowanie", summary)]:
             d.to_excel(xw, sheet_name=name, index=False)
             format_sheet(xw.sheets[name], d)
+    return out
 
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("benchmark", help="plik JSON benchmarku (sekcja 'questions')")
+    ap.add_argument("--session", required=True, help="session_id w Qdrancie, np. 64")
+    ap.add_argument("-s", "--strategy", default="turns8", choices=list(config.STRATEGIES))
+    ap.add_argument("-m", "--mode", default="dense", choices=["dense", "bm25", "hybrid"])
+    ap.add_argument("-k", type=int, default=5)
+    ap.add_argument("--context-order", default="score", choices=["score", "chrono"],
+                    help="kolejność fragmentów w prompcie: od najwyższego score albo po chunk_index")
+    ap.add_argument("--model", default=config.LLM_MODEL)
+    ap.add_argument("--out")
+    args = ap.parse_args()
+
+    with open(args.benchmark, encoding="utf-8") as f:
+        questions = json.load(f)["questions"]
+    collection = config.collection_name(args.strategy)
+    out = Path(args.out or f"benchmark_{args.session}_{args.strategy}_{args.mode}_k{args.k}_{args.context_order}.xlsx")
+
+    try:
+        df, frag, summary = run_benchmark(questions, args.session, args.strategy, args.mode, args.k,
+                                          args.context_order, args.model,
+                                          log=lambda m: print(m, flush=True))
+    except LookupError as e:
+        raise SystemExit(str(e))
+    cfg = config_frame(benchmark=args.benchmark, session_id=args.session, collection=collection,
+                       mode=args.mode, k=args.k, context_order=args.context_order, llm_model=args.model)
+    write_excel(out, df, frag, cfg, summary)
     print(f"\n{summary.to_string(index=False)}\n\nZapisano {out}")
 
 

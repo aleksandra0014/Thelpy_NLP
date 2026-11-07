@@ -48,6 +48,31 @@ def score(hits, q, k):
     }
 
 
+def evaluate(queries: list[dict], strategies: list[str], modes: list[str], k: int = 5,
+             scope: str = "all", retriever: Retriever | None = None, log=print) -> list[dict]:
+    """Średnie metryki dla każdej pary (strategia, tryb)."""
+    r = retriever or Retriever(get_client())
+    rows = []
+    for s in strategies:
+        coll = config.collection_name(s)
+        for mode in modes:
+            per_q = []
+            for q in queries:
+                flt = None
+                if scope == "session":
+                    flt = build_filter(session_id=q["session_id"])
+                elif scope == "client" and q.get("client_id"):
+                    flt = build_filter(client_id=q["client_id"])
+                per_q.append(score(r.search(coll, q["query"], mode, k, flt), q, k))
+            row = {"strategy": s, "mode": mode, "k": k, "n": len(queries)}
+            for m in ("hit", "recall", "mrr", "ctx_tokens"):
+                row[m] = round(statistics.mean(x[m] for x in per_q), 4) if per_q else 0.0
+            rows.append(row)
+            log and log(f"{s:16s} {mode:7s} hit@{k}={row['hit']:.3f}  recall@{k}={row['recall']:.3f}  "
+                        f"mrr={row['mrr']:.3f}  ctx_tokens={row['ctx_tokens']:.0f}")
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("queries")
@@ -60,27 +85,7 @@ def main():
     ap.add_argument("--out", default="eval_results.csv")
     args = ap.parse_args()
 
-    queries = load_queries(args.queries)
-    r = Retriever(get_client())
-    rows = []
-    for s in args.strategies:
-        coll = config.collection_name(s)
-        for mode in args.modes:
-            per_q = []
-            for q in queries:
-                flt = None
-                if args.scope == "session":
-                    flt = build_filter(session_id=q["session_id"])
-                elif args.scope == "client" and q.get("client_id"):
-                    flt = build_filter(client_id=q["client_id"])
-                per_q.append(score(r.search(coll, q["query"], mode, args.k, flt), q, args.k))
-            row = {"strategy": s, "mode": mode, "k": args.k, "n": len(queries)}
-            for m in ("hit", "recall", "mrr", "ctx_tokens"):
-                row[m] = round(statistics.mean(x[m] for x in per_q), 4)
-            rows.append(row)
-            print(f"{s:16s} {mode:7s} hit@{args.k}={row['hit']:.3f}  recall@{args.k}={row['recall']:.3f}  "
-                  f"mrr={row['mrr']:.3f}  ctx_tokens={row['ctx_tokens']:.0f}")
-
+    rows = evaluate(load_queries(args.queries), args.strategies, args.modes, args.k, args.scope)
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
