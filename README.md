@@ -28,15 +28,17 @@ python -m thelpy_api            # http://127.0.0.1:8000/docs  (albo: uvicorn the
 |---|---|---|
 | `GET /health`, `/config`, `/topics`, `/collections` | — | `/topics` = klucze do `topic` |
 | `POST /collections` | `scripts.create_collections` | |
+| `GET /collections/{strategy}/sessions` | — | metadane sesji w kolekcji, `?client_id=` |
 | `DELETE /collections/{strategy}/sessions/{id}` | — | |
 | `POST /ingest`, `POST /ingest/upload` | `scripts.ingest` | `topics: true` |
 | `POST /search` | `scripts.search` | `topic` |
 | `POST /ask` | `scripts.ask` | `topics`, `topic` |
 | `POST /ask-session` | `scripts.ask_session` | `topics`, `topic` |
+| `POST /summarize-session` | `scripts.summarize_session` (map-reduce całej sesji) | `topics`, `topic` |
 | `POST /benchmark-session` | `scripts.benchmark_session` (`xlsx: true` → plik) | `topics`, `topic` |
 | `POST /evaluate` | `scripts.evaluate` | |
 
 ```bash
 curl -X POST localhost:8000/ask-session -H 'Content-Type: application/json' \
-  -d '{"session_id": "64", "skip_ingest": true, "question": "What does he say about his friends?", "topic": "friends"}'
+  -d '{"session_id": "64", "question": "What does he say about his friends?", "topic": "friends"}'
 ```

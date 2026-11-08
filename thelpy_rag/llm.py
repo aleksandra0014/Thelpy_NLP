@@ -53,18 +53,18 @@ def check_prompt_fits(messages: list[dict], num_ctx: int, reserve: int = config.
     return n
 
 
-def generate(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
-             url: str = config.OLLAMA_URL, temperature: float = config.LLM_TEMPERATURE,
-             num_ctx: int = config.LLM_NUM_CTX, formatter=None) -> dict:
-    """Like answer(), but also returns the messages and Ollama's token counts."""
-    messages = build_messages(question, payloads, formatter)
-    check_prompt_fits(messages, num_ctx)
-
+def chat(messages: list[dict], model: str = config.LLM_MODEL, url: str = config.OLLAMA_URL,
+         temperature: float = config.LLM_TEMPERATURE, num_ctx: int = config.LLM_NUM_CTX,
+         num_predict: int | None = None) -> dict:
+    """Single Ollama /api/chat call -> {answer, prompt_tokens, answer_tokens}. No prompt-size check."""
+    options = {"temperature": temperature, "num_ctx": num_ctx}
+    if num_predict:
+        options["num_predict"] = num_predict
     r = requests.post(f"{url.rstrip('/')}/api/chat", timeout=600, json={
         "model": model,
         "stream": False,
         "think": False,   # qwen3: disables reasoning mode; remove to enable it
-        "options": {"temperature": temperature, "num_ctx": num_ctx},
+        "options": options,
         "messages": messages,
     })
     r.raise_for_status()
@@ -76,14 +76,24 @@ def generate(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
         warnings.warn(f"Ollama evaluated {prompt_tokens} prompt tokens = num_ctx={num_ctx}; "
                       f"the prompt was probably truncated.")
     if data.get("done_reason") == "length":
-        warnings.warn(f"Answer hit the context/length limit (num_ctx={num_ctx}) and is cut off.")
+        warnings.warn(f"Answer hit the length limit (num_ctx={num_ctx}, num_predict={num_predict}) "
+                      f"and is cut off.")
     return {
-        "model": model,
-        "messages": messages,
         "answer": data["message"]["content"],
         "prompt_tokens": prompt_tokens,              # Ollama: whole prompt (system + fragments + question)
         "answer_tokens": data.get("eval_count") or 0,
+        "truncated": data.get("done_reason") == "length",
     }
+
+
+def generate(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
+             url: str = config.OLLAMA_URL, temperature: float = config.LLM_TEMPERATURE,
+             num_ctx: int = config.LLM_NUM_CTX, formatter=None) -> dict:
+    """Like answer(), but also returns the messages and Ollama's token counts."""
+    messages = build_messages(question, payloads, formatter)
+    check_prompt_fits(messages, num_ctx)
+    return {"model": model, "messages": messages,
+            **chat(messages, model=model, url=url, temperature=temperature, num_ctx=num_ctx)}
 
 
 def answer(question: str, payloads: list[dict], **kw) -> str:

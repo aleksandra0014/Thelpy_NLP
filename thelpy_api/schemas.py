@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from thelpy_rag import config
 
@@ -75,25 +75,57 @@ class AskRequest(BaseModel):
     include_prompt: bool = Field(False, description="zwróć pełny prompt (messages)")
 
 
-class AskSessionRequest(BaseModel):
-    """scripts/ask_session.py — (wgranie) jednej sesji, dense, odpowiedź LLM z diagnostyką."""
-    question: str
+class SessionInput(BaseModel):
+    """Wspólne wejście dla operacji na jednej sesji (ask-session, summarize-session)."""
     file: Optional[str] = Field(None, description="ścieżka pliku .json sesji na serwerze")
     session: Optional[dict[str, Any]] = Field(None, description="sesja JSON wprost w zapytaniu")
-    session_id: Optional[str] = Field(None, description="wystarczy przy skip_ingest=true")
+    session_id: Optional[str] = Field(None, description="sesja już wgrana: samo session_id (bez file/session) "
+                                      "bierze gotowe chunki z kolekcji, bez wgrywania")
     n_turns: int = Field(8, ge=1, description="liczba tur w chunku")
     overlap_turns: int = Field(0, ge=0)
-    k: int = Field(5, ge=1, le=100, description="liczba fragmentów przekazanych do LLM")
     model: str = config.LLM_MODEL
-    skip_ingest: bool = Field(False, description="sesja jest już w kolekcji")
+    skip_ingest: bool = Field(False, description="przy file / session: nie wgrywaj ponownie (sesja już jest w "
+                                                 "kolekcji); przy samym session_id bez znaczenia")
     topics: bool = Field(False, description="wgraj sesję z tematami i pokaż tematy LLM-owi")
     topic: Optional[str] = Field(None, description=TOPIC_HELP + "; włącza topics")
 
+    @field_validator("file", "session", "session_id", "topic", mode="before")
+    @classmethod
+    def _empty_is_none(cls, v):
+        """Swagger (/docs) wysyła puste "" i {} dla nieużywanych pól — traktuj je jak niepodane."""
+        return None if v in ("", {}) or (isinstance(v, str) and not v.strip()) else v
+
     @model_validator(mode="after")
     def _need_session(self):
-        if not (self.file or self.session or (self.skip_ingest and self.session_id)):
-            raise ValueError("Podaj file albo session (albo session_id razem z skip_ingest=true)")
+        if not (self.file or self.session or self.session_id):
+            raise ValueError("Podaj session_id (sesja już wgrana) albo file / session (wgranie i użycie)")
         return self
+
+    @property
+    def uses_existing(self) -> bool:
+        """Samo session_id (bez file/session): użyj chunków już wgranych do kolekcji, bez ingestu."""
+        return not (self.file or self.session)
+
+
+class AskSessionRequest(SessionInput):
+    """scripts/ask_session.py — (wgranie) jednej sesji, dense, odpowiedź LLM z diagnostyką."""
+    question: str
+    k: int = Field(5, ge=1, le=100, description="liczba fragmentów przekazanych do LLM")
+
+
+class SummarizeSessionRequest(SessionInput):
+    """scripts/summarize_session.py — podsumowanie całej sesji (map-reduce po chunkach w kolejności)."""
+    length: Literal["full", "brief"] = Field("full", description="full: Markdown w 5 sekcjach (~600 słów) "
+                                             "z odwołaniami do tur; brief: 3-5 zdań (~80 słów)")
+    focus: Optional[str] = Field(None, description="na czym skupić podsumowanie, np. \"client's motivation\"")
+    max_block_tokens: Optional[int] = Field(None, ge=600, description="zmniejsza blok map (wymusza map-reduce); "
+                                            "zwykle zostaw puste, do testów np. 1500")
+    include_steps: bool = Field(True, description="zwróć streszczenia cząstkowe z każdego poziomu")
+
+    @field_validator("focus", mode="before")
+    @classmethod
+    def _empty_focus(cls, v):
+        return None if isinstance(v, str) and not v.strip() else v
 
 
 # --- benchmark / evaluate ----------------------------------------------------

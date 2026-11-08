@@ -8,6 +8,7 @@ w llm.generate, a ingest z tematami jak w scripts/ingest.py.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import statistics
 import threading
@@ -24,12 +25,16 @@ from thelpy_rag.pipeline import resolve_strategy
 from thelpy_rag.search import Hit, Retriever, build_filter
 from thelpy_rag.sparse import BM25Encoder
 from thelpy_rag.store import create_collection, delete_session, get_client, upsert_chunks
+from thelpy_rag.summarize import fetch_chunks, summarize
 from thelpy_topics import integration, taxonomy
 from thelpy_topics import annotate as topic_annotate
 
 from . import schemas
 
 UPLOAD_DIR = config.PROJECT_ROOT / "data" / "uploads"   # sesje przysłane w zapytaniu (JSON / upload)
+
+# logger uvicorna ma już handler i poziom INFO -> postęp długich operacji widać w konsoli serwera
+log = logging.getLogger("uvicorn.error")
 
 
 # --- zasoby współdzielone przez zapytania -------------------------------------
@@ -172,6 +177,48 @@ def list_collections(res: Resources) -> list[dict]:
     return sorted(out, key=lambda r: r["collection"])
 
 
+SESSION_FIELDS = ["session_id", "client_id", "session_at", "added_at", "duration_seconds", "source_version",
+                  "chunk_index", "turn_ids", "n_tokens", "topic_labels"]
+
+
+def list_sessions(strategy: str, res: Resources, client_id: str | None = None) -> dict:
+    """Metadane sesji w kolekcji: przejście po wszystkich chunkach (tylko pola metadanych, bez tekstu
+    i wektorów) i zgrupowanie po session_id."""
+    name = config.collection_name(strategy_name(strategy))
+    require_collection(res, name)
+    flt = build_filter(client_id=client_id)
+
+    sessions: dict[str, dict] = {}
+    offset = None
+    while True:
+        points, offset = res.client.scroll(name, scroll_filter=flt, limit=1024, offset=offset,
+                                           with_payload=SESSION_FIELDS, with_vectors=False)
+        for pt in points:
+            p = pt.payload
+            s = sessions.setdefault(p["session_id"], {
+                "session_id": p["session_id"], "client_id": p.get("client_id"),
+                "session_at": p.get("session_at"), "added_at": p.get("added_at"),
+                "duration_seconds": p.get("duration_seconds"), "source_version": p.get("source_version"),
+                "n_chunks": 0, "_turns": set(), "_bounds": [], "tokens": 0, "topics": False})
+            s["n_chunks"] += 1
+            s["tokens"] += p.get("n_tokens") or 0
+            s["_turns"].update(p.get("turn_ids") or [])
+            if p.get("turn_ids"):
+                s["_bounds"].append((p["chunk_index"], p["turn_ids"][0], p["turn_ids"][-1]))
+            s["topics"] = s["topics"] or bool(p.get("topic_labels"))
+        if offset is None:
+            break
+
+    rows = []
+    for s in sessions.values():
+        bounds = sorted(s.pop("_bounds"))
+        s["n_turns"] = len(s.pop("_turns"))
+        s["turn_range"] = f"{bounds[0][1]}–{bounds[-1][2]}" if bounds else None
+        rows.append(s)
+    rows.sort(key=lambda s: (s["session_at"] or "", s["session_id"]))
+    return {"collection": name, "client_id": client_id, "count": len(rows), "sessions": rows}
+
+
 def remove_session(strategy: str, session_id: str, res: Resources) -> dict:
     name = config.collection_name(strategy_name(strategy))
     require_collection(res, name)
@@ -275,24 +322,36 @@ def ask(req: schemas.AskRequest, res: Resources) -> dict:
 
 
 # --- ask_session (scripts/ask_session.py) ---------------------------------------
-def ask_session(req: schemas.AskSessionRequest, res: Resources) -> dict:
-    topics = req.topics or bool(req.topic)
+def prepare_session(req: schemas.SessionInput, res: Resources) -> tuple[str, str, bool]:
+    """Wspólny początek ask_session / summarize_session: (wgranie) sesji -> (session_id, collection, ingested)."""
     check_topic(req.topic)
+    topics = req.topics or bool(req.topic)
     strategy = resolve_strategy("turns", n_turns=req.n_turns, overlap_turns=req.overlap_turns)
     collection = config.collection_name(strategy)
 
-    path = None
-    if req.session is not None:
-        path = save_session(req.session)
-    elif req.file:
-        path = server_path(req.file)
-    session_id = load_session(path).session_id if path else req.session_id
+    # samo session_id -> gotowe chunki z kolekcji, bez wgrywania
+    if req.uses_existing:
+        require_collection(res, collection)
+        n = res.client.count(collection, count_filter=build_filter(session_id=req.session_id), exact=True).count
+        if not n:
+            raise LookupError(f"Sesji {req.session_id} nie ma w kolekcji {collection} — wgraj ją (POST /ingest "
+                              f"albo podaj file / session) lub sprawdź GET /collections/{strategy}/sessions")
+        return req.session_id, collection, False
+
+    path = save_session(req.session) if req.session else server_path(req.file)
+    session_id = load_session(path).session_id
 
     ingested = False
     if not req.skip_ingest:
         ingest(schemas.IngestRequest(paths=[str(path)], strategies=[strategy], topics=topics), res)
         ingested = True
     require_collection(res, collection)
+    return session_id, collection, ingested
+
+
+def ask_session(req: schemas.AskSessionRequest, res: Resources) -> dict:
+    topics = req.topics or bool(req.topic)
+    session_id, collection, ingested = prepare_session(req, res)
 
     # --- retrieval (dense, tylko ta sesja) ---
     flt = apply_topic(build_filter(session_id=session_id), req.topic)
@@ -309,6 +368,29 @@ def ask_session(req: schemas.AskSessionRequest, res: Resources) -> dict:
     contexts = sorted((h.payload for h in hits), key=lambda p: p["chunk_index"])
     gen = generate(req.question, contexts, model=req.model, formatter=formatter(topics))
     return {**out, **llm_result(gen, include_prompt=True)}
+
+
+# --- summarize_session (scripts/summarize_session.py) ---------------------------
+def summarize_session(req: schemas.SummarizeSessionRequest, res: Resources) -> dict:
+    """Wszystkie chunki sesji (po metadanych, nie wyszukiwaniem) -> map-reduce LLM."""
+    topics = req.topics or bool(req.topic)
+    session_id, collection, ingested = prepare_session(req, res)
+
+    flt = apply_topic(build_filter(session_id=session_id), req.topic)
+    payloads = fetch_chunks(res.client, collection, flt)
+    out = {"session_id": session_id, "collection": collection, "ingested": ingested, "topic": req.topic,
+           "focus": req.focus, "n_chunks": len(payloads)}
+    if not payloads:
+        detail = (f"Brak chunków z tematem '{req.topic}' (kolekcja wgrana z topics? klucz z taxonomy.py?)"
+                  if req.topic else f"Brak chunków sesji {session_id} w {collection}")
+        return {**out, "summary": None, "detail": detail}
+
+    result = summarize(payloads, model=req.model, formatter=formatter(topics), focus=req.focus,
+                       max_block_tokens=req.max_block_tokens, length=req.length,
+                       log=lambda m: log.info("[summarize %s] %s", session_id, m))
+    if not req.include_steps:
+        result.pop("steps")
+    return {**out, **result}
 
 
 # --- benchmark (scripts/benchmark_session.py) -----------------------------------

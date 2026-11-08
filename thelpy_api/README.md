@@ -14,7 +14,7 @@ i zwraca wynik jako JSON zamiast wypisywać go w terminalu.
 3. [Informacje](#3-informacje): `/health`, `/config`, `/topics`
 4. [Kolekcje](#4-kolekcje): `/collections`
 5. [Wgrywanie sesji](#5-wgrywanie-sesji): `/ingest`, `/ingest/upload`
-6. [Zapytania](#6-zapytania): `/search`, `/ask`, `/ask-session`
+6. [Zapytania](#6-zapytania): `/search`, `/ask`, `/ask-session`, `/summarize-session`
 7. [Ewaluacja](#7-ewaluacja): `/benchmark-session`, `/evaluate`
 8. [Tematy](#8-tematy)
 9. [Błędy](#9-błędy)
@@ -50,12 +50,14 @@ jest zamontowane jako `/app/data`, więc podajesz je tak samo.
 | `GET /topics` | lista tematów i podtematów | — |
 | `GET /collections` | kolekcje i liczba punktów | — |
 | `POST /collections` | tworzy puste kolekcje | `create_collections.py` |
+| `GET /collections/{strategy}/sessions` | metadane wszystkich sesji w kolekcji | — |
 | `DELETE /collections/{strategy}/sessions/{session_id}` | usuwa jedną sesję z kolekcji | — |
 | `POST /ingest` | wgrywa sesje (ścieżki lub JSON) | `ingest.py` |
 | `POST /ingest/upload` | wgrywa sesje wysłane jako pliki | `ingest.py` |
 | `POST /search` | wyszukuje fragmenty, bez LLM | `search.py` |
 | `POST /ask` | wyszukuje fragmenty i generuje odpowiedź LLM | `ask.py` |
 | `POST /ask-session` | pytanie do jednej sesji z pełną diagnostyką | `ask_session.py` |
+| `POST /summarize-session` | podsumowanie całej sesji (map-reduce) | `summarize_session.py` |
 | `POST /benchmark-session` | benchmark pytań do jednej sesji (JSON lub Excel) | `benchmark_session.py` |
 | `POST /evaluate` | metryki wyszukiwania dla strategii × trybów | `evaluate.py` |
 
@@ -118,6 +120,29 @@ potrzebny, bo `/ingest` sam tworzy brakującą kolekcję.
 | `dim` | z modelu | wymiar wektora; domyślnie odczytany z modelu w Ollamie |
 
 Odpowiedź: `embed_model`, `dim` i dla każdej strategii `created` (`false` = już istniała, pominięta).
+
+### `GET /collections/{strategy}/sessions`
+
+Metadane wszystkich sesji wgranych do kolekcji danej strategii (np. `turns8`), posortowane po
+`session_at`. Opcjonalny parametr `client_id` zawęża listę do jednego pacjenta.
+
+```bash
+curl localhost:8000/collections/turns8/sessions
+curl 'localhost:8000/collections/turns8/sessions?client_id=1'
+```
+
+```json
+{"collection": "thelpy_turns8", "client_id": null, "count": 2,
+ "sessions": [{"session_id": "64", "client_id": "1", "session_at": "2026-10-26T17:16:50+00:00",
+               "added_at": "2026-10-26T17:16:50+00:00", "duration_seconds": 1857.0, "source_version": "v1",
+               "n_chunks": 33, "tokens": 7023, "topics": true, "n_turns": 262, "turn_range": "T001–T262"}]}
+```
+
+- `client_id` to `patient_id` z pliku sesji. Tę wartość podajesz w polu `client` w `/search` i `/ask`.
+- `n_chunks` i `tokens` to liczba chunków i suma ich tokenów w tej kolekcji. Zależą od strategii.
+- `n_turns` to liczba różnych tur. Przy overlapie tury się powtarzają, ale są liczone raz.
+- `topics` mówi, czy sesja została wgrana z tematami. Bez nich filtr `topic` nic w niej nie znajdzie.
+- Kolekcja, która nie istnieje, daje 404.
 
 ### `DELETE /collections/{strategy}/sessions/{session_id}`
 
@@ -249,18 +274,18 @@ cosinusowymi, pełny prompt, odpowiedź i liczby tokenów.
 | `question` | **wymagane** | pytanie |
 | `file` | — | plik sesji na serwerze, np. `data/annomi_64.json` |
 | `session` | — | albo sesja JSON wprost w zapytaniu |
-| `session_id` | — | albo samo ID, gdy sesja jest już wgrana (`skip_ingest: true`) |
+| `session_id` | — | albo samo ID: bez `file` / `session` endpoint bierze gotowe chunki z kolekcji, bez wgrywania (404, gdy sesji tam nie ma) |
 | `n_turns` | `8` | liczba tur w chunku (kolekcja `thelpy_turns<n_turns>`) |
 | `overlap_turns` | `0` | tury wspólne między chunkami |
 | `k` | `5` | liczba fragmentów przekazanych do LLM |
 | `model` | `LLM_MODEL` | model Ollamy |
-| `skip_ingest` | `false` | nie wgrywaj, sesja już jest w kolekcji |
+| `skip_ingest` | `false` | przy `file` / `session`: nie wgrywaj ponownie; przy samym `session_id` bez znaczenia |
 | `topics` | `false` | wgraj z tematami i pokaż tematy LLM-owi |
 | `topic` | — | szukaj tylko w chunkach z tym tematem; włącza `topics` |
 
 ```bash
 curl -X POST localhost:8000/ask-session -H 'Content-Type: application/json' \
-  -d '{"session_id": "64", "skip_ingest": true, "question": "What does he say about his friends?", "topic": "friends"}'
+  -d '{"session_id": "64", "question": "What does he say about his friends?", "topic": "friends"}'
 ```
 
 ```json
@@ -276,8 +301,60 @@ curl -X POST localhost:8000/ask-session -H 'Content-Type: application/json' \
 - Fragmenty w prompcie są ułożone po kolejności w sesji (`chunk_index`).
 - Bez trafień (np. temat nie występuje w sesji): `answer: null` i wyjaśnienie w `detail`.
 
-> Bez `skip_ingest` sesja jest wgrywana przy każdym wywołaniu. Przy kolejnych pytaniach do tej
-> samej sesji używaj `skip_ingest: true` i `session_id`.
+> Z `file` / `session` (bez `skip_ingest`) sesja jest wgrywana przy każdym wywołaniu. Przy kolejnych
+> pytaniach do tej samej sesji wystarczy samo `session_id`: endpoint użyje gotowych chunków.
+
+---
+
+### `POST /summarize-session` — `scripts.summarize_session`
+
+Podsumowanie **całej jednej sesji**. Wejście jest takie samo jak w `/ask-session`, ale bez
+`question` i `k`. Chunki nie są wyszukiwane wektorowo: pobierane są **wszystkie** chunki sesji
+po metadanych (`session_id`, opcjonalnie `topic`), w kolejności `chunk_index`, i streszczane:
+
+1. **stuff**: cała sesja mieści się w oknie kontekstu, więc wystarcza jedno wywołanie LLM.
+2. **map**: sąsiednie chunki są grupowane w możliwie równe bloki mieszczące się w oknie, każdy blok jest streszczany.
+3. **reduce**: streszczenia cząstkowe są łączone w końcowe podsumowanie. Jeśli się nie mieszczą,
+   są grupowane i streszczane ponownie (kolejne poziomy, tree summarize).
+
+Końcowe podsumowanie ma sekcje *Reason for the session / Main topics / Client's state and emotions /
+Therapist's interventions / Agreements and next steps*, z odwołaniami `[turns X–Y]`.
+
+Szczegółowy opis algorytmu (budżety, pakowanie, długości, prompty, ostrzeżenia): [`thelpy_rag/SUMMARIZE.md`](../thelpy_rag/SUMMARIZE.md).
+
+| Pole | Domyślnie | Opis |
+|---|---|---|
+| `file` / `session` / `session_id` | — | jak w `/ask-session` |
+| `n_turns`, `overlap_turns` | `8`, `0` | strategia chunków (kolekcja `thelpy_turns<n_turns>`) |
+| `model` | `LLM_MODEL` | model Ollamy |
+| `skip_ingest` | `false` | przy `file` / `session`: nie wgrywaj ponownie; przy samym `session_id` bez znaczenia |
+| `topics` | `false` | wgraj z tematami i pokaż tematy LLM-owi |
+| `topic` | — | podsumuj tylko chunki z tym tematem; włącza `topics` |
+| `length` | `full` | `full`: Markdown w 5 sekcjach, ok. 600 słów, z odwołaniami do tur; `brief`: 3–5 zdań, ok. 80 słów |
+| `focus` | — | na czym się skupić, np. `"client's motivation to change"` (dopisywane do każdego promptu) |
+| `max_block_tokens` | — | zmniejsza blok map (min. 600), np. 1500, żeby wymusić map-reduce do testów; zwykle zostaw puste |
+| `include_steps` | `true` | zwróć streszczenia cząstkowe każdego poziomu |
+
+```bash
+curl -X POST localhost:8000/summarize-session -H 'Content-Type: application/json' \
+  -d '{"session_id": "64"}'
+```
+
+```json
+{"session_id": "64", "collection": "thelpy_turns8", "ingested": false, "topic": null, "focus": null,
+ "n_chunks": 33, "model": "qwen3.5:4b", "turn_range": "T001–T262", "block_budget": 6411, "warnings": [],
+ "method": "map_reduce", "levels": 1, "llm_calls": 3, "prompt_tokens": 9795, "answer_tokens": 1912,
+ "summary": "## Reason for the session\n…",
+ "steps": [{"level": 0, "turn_range": "T001–T128", "n_inputs": 16, "target_words": 500, "words": 418, "summary": "…"},
+           {"level": 0, "turn_range": "T129–T262", "n_inputs": 17, "target_words": 500, "words": 469, "summary": "…"}]}
+```
+
+- `block_budget`: tokeny tekstu na jedno wywołanie (`LLM_NUM_CTX` minus limit odpowiedzi i prompt).
+- `levels`: liczba poziomów map/reduce przed końcowym wywołaniem (`0` = stuff).
+- Długość streszczeń cząstkowych zależy od wejścia: map ok. 20% tokenów bloku, reduce ok. 50%, w granicach 120–500 słów (`target_words`; `words` to faktyczna długość). Finał: `full` ok. 600 słów, `brief` 3–5 zdań. Kroki map są takie same w obu wariantach, więc czas jest podobny. Stałe są na górze `thelpy_rag/summarize.py` (`LENGTHS`).
+- `prompt_tokens` / `answer_tokens`: sumy ze wszystkich wywołań (liczby Ollamy).
+- `warnings`: np. obcięta odpowiedź na limicie tokenów albo powtarzające się tury przy `overlap_turns > 0`.
+- Bez chunków (np. temat nie występuje w sesji): `summary: null` i wyjaśnienie w `detail`.
 
 ---
 
@@ -372,10 +449,10 @@ Tematy pochodzą z `thelpy_topics`. Działają w dwóch krokach:
    kopię. Pierwsza anotacja po starcie serwera ładuje model (kilka–kilkanaście sekund).
 2. **Użycie tematów w zapytaniach:**
    - `topic: "<klucz>"` — szukaj tylko w chunkach, w których ten temat lub podtemat występuje
-     jako główny albo poboczny. Działa w `/search`, `/ask`, `/ask-session`, `/benchmark-session`.
+     jako główny albo poboczny. Działa w `/search`, `/ask`, `/ask-session`, `/summarize-session`, `/benchmark-session`.
    - `topics: true` — LLM widzi przy każdym fragmencie linię z jego tematami, np.
      `(topics: Friends and social life 59%, Substances and addictions 31%; subtopics: …)`.
-     Działa w `/ask`, `/ask-session`, `/benchmark-session` (`topic` włącza to automatycznie).
+     Działa w `/ask`, `/ask-session`, `/summarize-session`, `/benchmark-session` (`topic` włącza to automatycznie).
 
 Nieznany klucz tematu daje błąd 400. Jeśli kolekcja była wgrana **bez** tematów, filtr `topic`
 nie znajdzie niczego: wgraj sesję ponownie z `topics: true`.
@@ -414,7 +491,7 @@ curl -X POST $API/search -H "$H" -d '{"query": "friends", "strategy": "turns8", 
 
 # 4. zapytaj LLM
 curl -X POST $API/ask-session -H "$H" \
-  -d '{"session_id": "64", "skip_ingest": true, "question": "What does he say about his friends?", "topics": true}'
+  -d '{"session_id": "64", "question": "What does he say about his friends?", "topics": true}'
 
 # 5. benchmark do Excela
 curl -X POST $API/benchmark-session -H "$H" \

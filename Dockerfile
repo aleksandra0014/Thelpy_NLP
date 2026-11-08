@@ -1,9 +1,16 @@
 # Backend Thelpy RAG (FastAPI): thelpy_rag + thelpy_topics + thelpy_api
-FROM python:3.14-slim
+#
+# Szybkie przebudowy:
+# - obraz bazowy przypięty do digestu: sam tag python:3.14-slim co jakiś czas wskazuje nowy obraz na
+#   Docker Hubie, a nowa warstwa FROM unieważnia cache wszystkich kolejnych (8 GB torcha od nowa).
+#   Aktualizacja: docker buildx imagetools inspect python:3.14-slim  -> wklej nowy Digest.
+# - torch w osobnej warstwie przed requirements.txt: zmiana requirements nie pobiera torcha ponownie.
+# - --mount=type=cache: pobrane paczki pip zostają w cache BuildKita (poza obrazem), więc nawet
+#   po unieważnieniu warstwy instalacja nie pobiera ich z sieci. Czyszczenie: docker builder prune.
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HOME=/cache/huggingface \
     THELPY_API_HOST=0.0.0.0 \
@@ -18,9 +25,12 @@ WORKDIR /app
 # torch z requirements.txt jest pomijany, żeby pip nie podmienił go wersją z PyPI.
 ARG TORCH_INDEX=cu128
 ARG TORCH_VERSION=2.11.0
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "torch==${TORCH_VERSION}" --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}"
+
 COPY requirements.txt .
-RUN pip install "torch==${TORCH_VERSION}" --index-url "https://download.pytorch.org/whl/${TORCH_INDEX}" \
- && grep -v -i '^torch==' requirements.txt > /tmp/requirements.txt \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    grep -v -i '^torch==' requirements.txt > /tmp/requirements.txt \
  && pip install -r /tmp/requirements.txt "torch==${TORCH_VERSION}"
 
 COPY thelpy_rag/ thelpy_rag/

@@ -14,9 +14,11 @@ import json
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from starlette.background import BackgroundTask
@@ -36,6 +38,32 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Thelpy RAG API", version="0.1.0", lifespan=lifespan,
               description="Wyszukiwanie i odpowiedzi LLM na transkrypcjach sesji terapeutycznych "
                           "(Qdrant + Ollama), z tematami z thelpy_topics.")
+
+
+def _openapi_with_file_inputs():
+    """FastAPI generuje OpenAPI 3.1, gdzie plik to {"type": "string", "contentMediaType": ...}.
+    Swagger UI (/docs) rozpoznaje pole pliku tylko po "format": "binary" — bez tego list[UploadFile]
+    wyświetla się jako zwykłe pole tekstowe. Dopisujemy format do takich schematów."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+
+    def fix(node):
+        if isinstance(node, dict):
+            if node.get("type") == "string" and node.get("contentMediaType") == "application/octet-stream":
+                node["format"] = "binary"
+            for v in node.values():
+                fix(v)
+        elif isinstance(node, list):
+            for v in node:
+                fix(v)
+
+    fix(schema)
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _openapi_with_file_inputs
 
 
 def res(request: Request) -> service.Resources:
@@ -121,6 +149,13 @@ def create_collections(body: schemas.CreateCollectionsRequest, request: Request)
     return service.create_collections(body, res(request))
 
 
+@app.get("/collections/{strategy}/sessions", tags=["collections"])
+def list_sessions(strategy: str, request: Request, client_id: Optional[str] = None):
+    """Metadane wszystkich sesji w kolekcji strategii (np. turns8): ID, pacjent, daty, czas trwania,
+    liczba chunków / tur / tokenów, zakres tur, czy wgrana z tematami. `client_id` zawęża do pacjenta."""
+    return service.list_sessions(strategy, res(request), client_id)
+
+
 @app.delete("/collections/{strategy}/sessions/{session_id}", tags=["collections"])
 def delete_session(strategy: str, session_id: str, request: Request):
     """Usuwa wszystkie chunki jednej sesji z kolekcji strategii."""
@@ -137,9 +172,11 @@ def ingest(body: schemas.IngestRequest, request: Request):
 
 @app.post("/ingest/upload", tags=["ingest"])
 def ingest_upload(request: Request, files: list[UploadFile] = File(..., description="pliki .json sesji"),
-                  strategies: list[str] = Form(default_factory=lambda: list(config.STRATEGIES)),
+                  strategies: Optional[list[str]] = Form(None, description="puste = wszystkie; "
+                                                         + schemas.STRATEGY_HELP),
                   topics: bool = Form(False), dry_run: bool = Form(False), show: int = Form(0)):
     """To samo co /ingest, ale z plikami wysłanymi jako multipart/form-data."""
+    strategies = [s for s in (strategies or []) if s.strip()] or list(config.STRATEGIES)
     sessions = []
     for f in files:
         try:
@@ -168,6 +205,13 @@ def ask(body: schemas.AskRequest, request: Request):
 def ask_session(body: schemas.AskSessionRequest, request: Request):
     """scripts/ask_session.py — (wgranie) jednej sesji, dense, prompt, odpowiedź i tokeny."""
     return service.ask_session(body, res(request))
+
+
+@app.post("/summarize-session", tags=["query"])
+def summarize_session(body: schemas.SummarizeSessionRequest, request: Request):
+    """scripts/summarize_session.py — (wgranie) jednej sesji i podsumowanie map-reduce wszystkich chunków
+    w kolejności chronologicznej (bez wyszukiwania); opcjonalnie tylko chunki z tematem `topic`."""
+    return service.summarize_session(body, res(request))
 
 
 # --- ewaluacja ------------------------------------------------------------------
