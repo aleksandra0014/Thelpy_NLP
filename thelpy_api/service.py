@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from thelpy_rag import config
+from thelpy_rag import keywords as kw
 from thelpy_rag.chunking import chunk_session, get_tokenizer
 from thelpy_rag.embeddings import OllamaEmbedder
 from thelpy_rag.llm import generate
@@ -390,6 +391,24 @@ def summarize_session(req: schemas.SummarizeSessionRequest, res: Resources) -> d
                        log=lambda m: log.info("[summarize %s] %s", session_id, m))
     if not req.include_steps:
         result.pop("steps")
+    return {**out, **result}
+
+
+# --- session_keywords (scripts/session_keywords.py) -----------------------------
+def session_keywords(req: schemas.SessionKeywordsRequest, res: Resources) -> dict:
+    """Wszystkie chunki sesji z wektorami (z Qdrant, bez ponownego embeddingu) -> keywordy, bez LLM."""
+    session_id, collection, ingested = prepare_session(req, res)
+    flt = apply_topic(build_filter(session_id=session_id), req.topic)
+    payloads = fetch_chunks(res.client, collection, flt, with_vectors=True)
+    out = {"session_id": session_id, "collection": collection, "ingested": ingested, "topic": req.topic,
+           "n_chunks": len(payloads)}
+    if not payloads:
+        return {**out, "vocab": [], "free": [], "detail": f"Brak chunków sesji {session_id} w {collection}"}
+
+    vocab = kw.load_vocab(server_path(req.vocab_file) if req.vocab_file else config.KEYWORDS_FILE)
+    background = kw.background_vectors(res.client, collection) if req.background else None
+    result = kw.session_keywords(payloads, res.embedder, vocab=vocab, background=background, top_n=req.top_n,
+                                 free_top_n=req.free_top_n, diversity=req.diversity, client_only=req.client_only)
     return {**out, **result}
 
 

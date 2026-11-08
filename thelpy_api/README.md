@@ -14,7 +14,7 @@ i zwraca wynik jako JSON zamiast wypisywać go w terminalu.
 3. [Informacje](#3-informacje): `/health`, `/config`, `/topics`
 4. [Kolekcje](#4-kolekcje): `/collections`
 5. [Wgrywanie sesji](#5-wgrywanie-sesji): `/ingest`, `/ingest/upload`
-6. [Zapytania](#6-zapytania): `/search`, `/ask`, `/ask-session`, `/summarize-session`
+6. [Zapytania](#6-zapytania): `/search`, `/ask`, `/ask-session`, `/summarize-session`, `/session-keywords`
 7. [Ewaluacja](#7-ewaluacja): `/benchmark-session`, `/evaluate`
 8. [Tematy](#8-tematy)
 9. [Błędy](#9-błędy)
@@ -58,6 +58,7 @@ jest zamontowane jako `/app/data`, więc podajesz je tak samo.
 | `POST /ask` | wyszukuje fragmenty i generuje odpowiedź LLM | `ask.py` |
 | `POST /ask-session` | pytanie do jednej sesji z pełną diagnostyką | `ask_session.py` |
 | `POST /summarize-session` | podsumowanie całej sesji (map-reduce) | `summarize_session.py` |
+| `POST /session-keywords` | keywordy sesji: słownik + wolne frazy, bez LLM | `session_keywords.py` |
 | `POST /benchmark-session` | benchmark pytań do jednej sesji (JSON lub Excel) | `benchmark_session.py` |
 | `POST /evaluate` | metryki wyszukiwania dla strategii × trybów | `evaluate.py` |
 
@@ -330,7 +331,7 @@ Szczegółowy opis algorytmu (budżety, pakowanie, długości, prompty, ostrzeż
 | `skip_ingest` | `false` | przy `file` / `session`: nie wgrywaj ponownie; przy samym `session_id` bez znaczenia |
 | `topics` | `false` | wgraj z tematami i pokaż tematy LLM-owi |
 | `topic` | — | podsumuj tylko chunki z tym tematem; włącza `topics` |
-| `length` | `full` | `full`: Markdown w 5 sekcjach, ok. 600 słów, z odwołaniami do tur; `brief`: 3–5 zdań, ok. 80 słów |
+| `length` | `full` | `full`: Markdown w 5 sekcjach, ok. 600 słów, z odwołaniami do tur; `brief`: 3–5 zdań, ok. 80 słów; `all`: oba, map-reduce tylko raz (wynik w `summaries`) |
 | `focus` | — | na czym się skupić, np. `"client's motivation to change"` (dopisywane do każdego promptu) |
 | `max_block_tokens` | — | zmniejsza blok map (min. 600), np. 1500, żeby wymusić map-reduce do testów; zwykle zostaw puste |
 | `include_steps` | `true` | zwróć streszczenia cząstkowe każdego poziomu |
@@ -355,6 +356,42 @@ curl -X POST localhost:8000/summarize-session -H 'Content-Type: application/json
 - `prompt_tokens` / `answer_tokens`: sumy ze wszystkich wywołań (liczby Ollamy).
 - `warnings`: np. obcięta odpowiedź na limicie tokenów albo powtarzające się tury przy `overlap_turns > 0`.
 - Bez chunków (np. temat nie występuje w sesji): `summary: null` i wyjaśnienie w `detail`.
+- `summaries`: zawsze `{wariant: tekst}`. Przy `length: "all"` to `{"full": …, "brief": …}`, a `summary` jest `null`.
+
+### `POST /session-keywords` — `scripts.session_keywords`
+
+Keywordy jednej sesji, **bez LLM** (kilka sekund). Wejście sesji jest takie samo jak w `/summarize-session`.
+Działają tu dwie metody, obie na wektorach chunków zapisanych w Qdrant przy ingeście:
+
+- **`vocab`**: hasła ze słownika [`data/keywords.yaml`](../data/keywords.yaml) (matka, ojciec, praca,
+  alkohol, cukrzyca…). Wynik hasła łączy dosłowne trafienia słów/aliasów z podobieństwem embeddingu
+  hasła do chunków.
+- **`free`**: wolne frazy z wypowiedzi klienta (KeyBERT-style), bez słownika.
+
+Jak to dokładnie działa: [`thelpy_rag/KEYWORDS.md`](../thelpy_rag/KEYWORDS.md).
+
+| Pole | Domyślnie | Opis |
+|---|---|---|
+| `file` / `session` / `session_id` | — | jak w `/ask-session` |
+| `n_turns`, `overlap_turns` | `8`, `0` | strategia chunków |
+| `top_n` | `10` | ile haseł ze słownika |
+| `free_top_n` | `10` | ile wolnych fraz (`0` = pomiń, szybciej) |
+| `diversity` | `0.5` | MMR: `0` = sama trafność, `1` = maksymalna różnorodność fraz |
+| `client_only` | `true` | wolne frazy tylko z wypowiedzi klienta |
+| `vocab_file` | — | własny słownik `.yaml` na serwerze (domyślnie `KEYWORDS_FILE`) |
+| `background` | `true` | normalizacja na tle wszystkich chunków kolekcji (inne sesje) |
+| `topic` | — | tylko chunki z tym tematem |
+
+```bash
+curl -X POST localhost:8000/session-keywords -H 'Content-Type: application/json' -d '{"session_id": "64"}'
+```
+
+```json
+{"session_id": "64", "n_chunks": 33, "vocab_size": 158, "background_chunks": 108,
+ "vocab": [{"keyword": "narkotyki", "label": "illegal drugs", "category": "substancje", "score": 3.9,
+            "semantic": 2.29, "lexical_hits": 24, "coverage": 0.46, "turns": ["T009–T016", "T049–T056", "…"]}, "…"],
+ "free":  [{"phrase": "scene", "count": 9, "relevance": 0.023}, {"phrase": "drugs", "count": 3, "relevance": 0.018}, "…"]}
+```
 
 ---
 

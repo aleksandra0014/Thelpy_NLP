@@ -72,13 +72,16 @@ LENGTHS = {
 
 
 # --- pobranie chunków ---------------------------------------------------------
-def fetch_chunks(client: QdrantClient, collection: str, flt, page: int = 256) -> list[dict]:
-    """Wszystkie chunki pasujące do filtra (np. build_filter(session_id=...)), po chunk_index."""
+def fetch_chunks(client: QdrantClient, collection: str, flt, page: int = 256,
+                 with_vectors: bool = False) -> list[dict]:
+    """Wszystkie chunki pasujące do filtra (np. build_filter(session_id=...)), po chunk_index.
+    with_vectors: dołącza wektor dense chunka pod kluczem "_dense" (np. do keywordów)."""
     out, offset = [], None
     while True:
-        points, offset = client.scroll(collection, scroll_filter=flt, limit=page, offset=offset,
-                                       with_payload=True, with_vectors=False)
-        out.extend(p.payload for p in points)
+        points, offset = client.scroll(collection, scroll_filter=flt, limit=page, offset=offset, with_payload=True,
+                                       with_vectors=[config.DENSE_VECTOR] if with_vectors else False)
+        for p in points:
+            out.append({**p.payload, "_dense": p.vector[config.DENSE_VECTOR]} if with_vectors else p.payload)
         if offset is None:
             break
     return sorted(out, key=lambda p: p["chunk_index"])
@@ -140,7 +143,8 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
               max_block_tokens: int | None = None, num_ctx: int = config.LLM_NUM_CTX,
               length: str = "full", log=None) -> dict:
     """payloads: chunki jednej sesji w kolejności chronologicznej.
-    length: "full" (Markdown w sekcjach, ~600 słów) albo "brief" (3-5 zdań) — patrz LENGTHS.
+    length: "full" (Markdown w sekcjach, ~600 słów), "brief" (3-5 zdań) — patrz LENGTHS — albo "all":
+            wspólny map-reduce i osobny finał dla każdego wariantu (wynik w "summaries").
     formatter: payloads -> tekst (domyślnie llm.format_context; z tematami: integration.format_context_with_topics).
     max_block_tokens: zmniejsza budżet bloku (np. żeby wymusić map-reduce do testów).
     log: opcjonalna funkcja str -> None (np. print, logger.info) — postęp kolejnych kroków."""
@@ -152,15 +156,15 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
     fmt = formatter or format_context
     focus_note = FOCUS_NOTE.format(focus=focus) if focus else ""
 
-    if length not in LENGTHS:
-        raise ValueError(f"Nieznana długość '{length}' — dostępne: {', '.join(LENGTHS)}")
-    final = LENGTHS[length]
-    final_tokens = final["tokens"]
+    if length != "all" and length not in LENGTHS:
+        raise ValueError(f"Nieznana długość '{length}' — dostępne: {', '.join(LENGTHS)}, all")
+    variants = list(LENGTHS) if length == "all" else [length]
+    final_tokens = max(LENGTHS[v]["tokens"] for v in variants)
 
     # budżet na tekst w jednym wywołaniu: okno - najdłuższa odpowiedź (finał albo map/reduce)
-    # - prompt systemowy - najdłuższa instrukcja
-    longest_task = max((MAP_TASK, REDUCE_TASK, FROM_SUMMARIES + final["task"], FROM_CHUNKS + final["task"]),
-                       key=len)
+    # - prompt systemowy - najdłuższa instrukcja (po wszystkich wariantach finału)
+    final_tasks = [prefix + LENGTHS[v]["task"] for v in variants for prefix in (FROM_SUMMARIES, FROM_CHUNKS)]
+    longest_task = max((MAP_TASK, REDUCE_TASK, *final_tasks), key=lambda t: tok.count(t))
     overhead = (tok.count(SYSTEM_PROMPT) + tok.count(longest_task + focus_note)
                 + TEMPLATE_OVERHEAD + PROMPT_MARGIN)
     budget = num_ctx - max(final_tokens, PART_TOKENS) - overhead
@@ -201,11 +205,18 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
             out["warnings"].append(f"Odpowiedź dla tur {_range(items)} obcięta na limicie {num_predict} tokenów")
         return r["answer"].strip()
 
-    def done(method: str, levels: int, summary: str) -> dict:
+    def finals(prefix: str, items: list[dict]) -> dict[str, str]:
+        """Finał dla każdego wariantu z tych samych wejść (całego transkryptu albo streszczeń)."""
+        return {v: call(prefix + LENGTHS[v]["task"], items, LENGTHS[v]["tokens"], f"finał ({v})",
+                        LENGTHS[v]["words"]) for v in variants}
+
+    def done(method: str, levels: int, summaries: dict[str, str]) -> dict:
         log(f"Gotowe: {method}, poziomy={levels}, wywołania LLM={stats['llm_calls']}, "
             f"tokeny prompt/odpowiedź={stats['prompt_tokens']}/{stats['answer_tokens']}, "
             f"czas {time.perf_counter() - t_start:.1f} s")
-        return {**out, "method": method, "levels": levels, **stats, "summary": summary, "steps": steps}
+        summary = summaries[variants[0]] if len(variants) == 1 else None
+        return {**out, "method": method, "levels": levels, **stats, "summary": summary,
+                "summaries": summaries, "steps": steps}
 
     def item(text: str, first: str, last: str) -> dict:
         return {"text": text, "first": first, "last": last, "tokens": tok.count(text) + sep}
@@ -223,8 +234,7 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
     # 1. stuff: wszystko w jednym oknie
     if total <= budget:
         log("Tryb stuff: cała sesja mieści się w jednym wywołaniu")
-        summary = call(FROM_CHUNKS + final["task"], items, final_tokens, f"finał ({length})", final["words"])
-        return done("stuff", 0, summary)
+        return done("stuff", 0, finals(FROM_CHUNKS, items))
 
     # 2-3. map, potem reduce hierarchiczny
     level = 0
@@ -252,5 +262,4 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
         items, level = new, level + 1
 
     log(f"Finał: łączenie {len(items)} streszczeń (~{sum(it['tokens'] for it in items)} tok)")
-    summary = call(FROM_SUMMARIES + final["task"], items, final_tokens, f"finał ({length})", final["words"])
-    return done("map_reduce", level, summary)
+    return done("map_reduce", level, finals(FROM_SUMMARIES, items))

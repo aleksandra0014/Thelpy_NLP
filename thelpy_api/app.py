@@ -214,6 +214,13 @@ def summarize_session(body: schemas.SummarizeSessionRequest, request: Request):
     return service.summarize_session(body, res(request))
 
 
+@app.post("/session-keywords", tags=["query"])
+def session_keywords(body: schemas.SessionKeywordsRequest, request: Request):
+    """scripts/session_keywords.py — keywordy sesji bez LLM: hasła ze słownika (dosłowne trafienia +
+    podobieństwo embeddingów do chunków) oraz wolne frazy z transkryptu (KeyBERT-style, MMR)."""
+    return service.session_keywords(body, res(request))
+
+
 # --- ewaluacja ------------------------------------------------------------------
 @app.post("/benchmark-session", tags=["evaluation"])
 def benchmark_session(body: schemas.BenchmarkRequest, request: Request):

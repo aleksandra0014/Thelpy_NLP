@@ -35,6 +35,7 @@ python -m thelpy_api            # http://127.0.0.1:8000/docs  (albo: uvicorn the
 | `POST /ask` | `scripts.ask` | `topics`, `topic` |
 | `POST /ask-session` | `scripts.ask_session` | `topics`, `topic` |
 | `POST /summarize-session` | `scripts.summarize_session` (map-reduce całej sesji) | `topics`, `topic` |
+| `POST /session-keywords` | `scripts.session_keywords` (keywordy: słownik + wolne frazy, bez LLM) | `topic` |
 | `POST /benchmark-session` | `scripts.benchmark_session` (`xlsx: true` → plik) | `topics`, `topic` |
 | `POST /evaluate` | `scripts.evaluate` | |
 

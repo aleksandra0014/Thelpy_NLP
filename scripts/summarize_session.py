@@ -35,8 +35,8 @@ def main():
     ap.add_argument("--overlap-turns", type=int, default=0)
     ap.add_argument("--model", default=config.LLM_MODEL)
     ap.add_argument("--skip-ingest", action="store_true", help="sesja jest już w kolekcji")
-    ap.add_argument("--length", choices=["full", "brief"], default="full",
-                    help="full: Markdown w sekcjach (~600 słów); brief: 3-5 zdań")
+    ap.add_argument("--length", choices=["full", "brief", "all"], default="full",
+                    help="full: Markdown w sekcjach (~600 słów); brief: 3-5 zdań; all: oba (map-reduce raz)")
     ap.add_argument("--focus", help="na czym skupić podsumowanie")
     ap.add_argument("--max-block-tokens", type=int, help="zmniejsza blok map (wymusza map-reduce)")
     ap.add_argument("--show-steps", action="store_true", help="pokaż streszczenia cząstkowe")
@@ -89,8 +89,9 @@ def main():
             print(f"\n[poziom {s['level']}] tury {s['turn_range']} ({s['n_inputs']} wejść)")
             print(textwrap.indent(s["summary"], "   "))
 
-    header(f"PODSUMOWANIE  {res['model']} | {res['method']} | poziomy={res['levels']}")
-    print(res["summary"])
+    for variant, text in res["summaries"].items():
+        header(f"PODSUMOWANIE ({variant})  {res['model']} | {res['method']} | poziomy={res['levels']}")
+        print(text)
 
     header("STATYSTYKI")
     print(f"chunki:             {res['n_chunks']}  (tury {res['turn_range']})")

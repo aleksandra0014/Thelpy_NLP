@@ -115,8 +115,9 @@ class AskSessionRequest(SessionInput):
 
 class SummarizeSessionRequest(SessionInput):
     """scripts/summarize_session.py — podsumowanie całej sesji (map-reduce po chunkach w kolejności)."""
-    length: Literal["full", "brief"] = Field("full", description="full: Markdown w 5 sekcjach (~600 słów) "
-                                             "z odwołaniami do tur; brief: 3-5 zdań (~80 słów)")
+    length: Literal["full", "brief", "all"] = Field(
+        "full", description="full: Markdown w 5 sekcjach (~600 słów) z odwołaniami do tur; brief: 3-5 zdań "
+                            "(~80 słów); all: oba — map-reduce raz, osobny finał na wariant (pole summaries)")
     focus: Optional[str] = Field(None, description="na czym skupić podsumowanie, np. \"client's motivation\"")
     max_block_tokens: Optional[int] = Field(None, ge=600, description="zmniejsza blok map (wymusza map-reduce); "
                                             "zwykle zostaw puste, do testów np. 1500")
@@ -125,6 +126,24 @@ class SummarizeSessionRequest(SessionInput):
     @field_validator("focus", mode="before")
     @classmethod
     def _empty_focus(cls, v):
+        return None if isinstance(v, str) and not v.strip() else v
+
+
+class SessionKeywordsRequest(SessionInput):
+    """scripts/session_keywords.py — keywordy sesji bez LLM: hasła ze słownika + wolne frazy (KeyBERT-style)."""
+    top_n: int = Field(10, ge=1, le=200, description="ile haseł ze słownika zwrócić")
+    free_top_n: int = Field(10, ge=0, le=100, description="ile wolnych fraz zwrócić (0 = pomiń, szybciej)")
+    diversity: float = Field(0.5, ge=0.0, le=1.0, description="MMR dla wolnych fraz: 0 = sama trafność, "
+                                                                "1 = maksymalna różnorodność")
+    client_only: bool = Field(True, description="wolne frazy tylko z wypowiedzi klienta")
+    vocab_file: Optional[str] = Field(None, description="własny słownik .yaml na serwerze "
+                                                        "(domyślnie KEYWORDS_FILE = data/keywords.yaml)")
+    background: bool = Field(True, description="normalizuj na tle chunków całej kolekcji (inne sesje) — "
+                                               "obniża hasła i frazy typowe dla każdej rozmowy")
+
+    @field_validator("vocab_file", mode="before")
+    @classmethod
+    def _empty_vocab(cls, v):
         return None if isinstance(v, str) and not v.strip() else v
 
 

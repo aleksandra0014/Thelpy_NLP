@@ -156,6 +156,7 @@ Przy domyślnych ustawieniach: `full` daje `8192 − 1536 − ok. 245 ≈ 6410` 
 - `LLM_NUM_CTX` (8192) to okno Ollamy, wspólne dla promptu **i** odpowiedzi.
 - Odjęta jest najdłuższa możliwa odpowiedź: limit finału (`full` 1536, `brief` 400) albo limit
   kroku map/reduce (`PART_TOKENS` = 1464), zależnie od tego, który jest większy.
+  Przy `length: "all"` brany jest największy limit spośród wariantów (czyli jak dla `full`).
 - Narzut jest liczony dla najdłuższej z instrukcji, więc budżet jest bezpieczny dla każdego kroku.
 - `focus` wydłuża instrukcję, więc nieco zmniejsza budżet.
 - `max_block_tokens` może budżet tylko **zmniejszyć**. Przydaje się, żeby wymusić map-reduce
@@ -246,9 +247,14 @@ stuff cały transkrypt (`FROM_CHUNKS`), plus instrukcję wybranego wariantu (`le
 |---|---|---|---|
 | `full` (domyślnie) | Markdown w 5 sekcjach, z odwołaniami do tur | ok. 600 słów | 1536 tok |
 | `brief` | 3–5 zdań zwykłej prozy, bez nagłówków i odwołań: po co klient przyszedł, główny problem, jego nastawienie, kluczowe ustalenie | ok. 80 słów | 400 tok |
+| `all` | oba powyższe: map/reduce **raz**, potem osobny finał dla każdego wariantu (z tych samych wejść) | | |
 
 Kroki map/reduce są **takie same** w obu wariantach. Brief powstaje ze szczegółowych streszczeń, więc
-jest trafny, ale trwa prawie tyle samo co `full`, bo czas zajmuje głównie map.
+jest trafny, ale trwa prawie tyle samo co `full`, bo czas zajmuje głównie map. Dlatego, gdy potrzebne
+są oba, `length: "all"` jest dużo tańsze niż dwa osobne zapytania: kosztuje tylko jedno dodatkowe
+wywołanie LLM (finał `brief`). Brief nie powstaje z gotowego `full`, tylko z tych samych streszczeń
+(albo transkryptu w stuff), żeby błędy jednego finału nie przechodziły do drugiego. W trybie stuff `all`
+to po prostu dwa wywołania na całym transkrypcie.
 
 Sekcje wariantu `full`:
 
@@ -400,6 +406,7 @@ Gotowe: map_reduce, poziomy=1, wywołania LLM=3, tokeny prompt/odpowiedź=10229/
   "method": "map_reduce", "levels": 1,
   "llm_calls": 3, "prompt_tokens": 10229, "answer_tokens": 2679,
   "summary": "## Reason for the session\n...",
+  "summaries": {"full": "## Reason for the session\n..."},
   "steps": [
     {"level": 0, "turn_range": "T001–T128", "n_inputs": 16, "target_words": 500, "words": 418, "summary": "..."},
     {"level": 0, "turn_range": "T129–T262", "n_inputs": 17, "target_words": 500, "words": 469, "summary": "..."}
@@ -415,7 +422,8 @@ Gotowe: map_reduce, poziomy=1, wywołania LLM=3, tokeny prompt/odpowiedź=10229/
 | `llm_calls` | liczba wywołań LLM łącznie z finałem |
 | `prompt_tokens` / `answer_tokens` | sumy liczników Ollamy ze wszystkich wywołań |
 | `steps` | kroki pośrednie (bez finału); `n_inputs` = ile chunków/streszczeń weszło do kroku |
-| `summary` | końcowe podsumowanie (Markdown) |
+| `summary` | końcowe podsumowanie (Markdown); przy `length: "all"` jest `null`, bo warianty są w `summaries` |
+| `summaries` | zawsze: `{wariant: tekst}`, np. `{"full": …, "brief": …}` przy `all` |
 | `ingested` | czy sesja była wgrywana w tym wywołaniu |
 
 `include_steps: false` usuwa `steps`, a reszta zostaje bez zmian.

@@ -52,6 +52,11 @@ BM25_STEMMER = _env("BM25_STEMMER", "english").lower()            # język Snowb
 RRF_K = int(_env("RRF_K", "60"))
 PREFETCH_LIMIT = int(_env("PREFETCH_LIMIT", "50"))
 
+# --- keywordy sesji (thelpy_rag/keywords.py) ----------------------------------
+KEYWORDS_FILE = Path(_env("KEYWORDS_FILE", str(PROJECT_ROOT / "data" / "keywords.yaml")))
+KW_CHUNK_Z = float(_env("KW_CHUNK_Z", "1.5"))         # chunk "zawiera" hasło od tylu odchyleń std (semantycznie)
+KW_LEX_WEIGHT = float(_env("KW_LEX_WEIGHT", "0.5"))   # waga dosłownych trafień: score += w * ln(1 + trafienia)
+
 # --- strategie chunkingu (jedna strategia = jedna kolekcja) -----------------
 COLLECTION_PREFIX = _env("COLLECTION_PREFIX", "thelpy")
 
