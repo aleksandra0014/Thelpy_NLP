@@ -1,6 +1,6 @@
 """Benchmark jednej sesji: pytania z pliku benchmarku -> RAG -> porównanie w Excelu.
 
-Sesja musi być już wgrana do kolekcji (np. przez scripts.ask_session). Dla każdego
+Sesja musi być już wgrana do kolekcji (np. przez scripts.ask --file albo scripts.ingest). Dla każdego
 pytania z sekcji "questions" skrypt wyszukuje fragmenty, generuje odpowiedź LLM
 i sprawdza, które elementy "evidence" (znaczniki hh:mm:ss lub zakresy a–b) są
 pokryte przez pobrane chunki. Ocenę merytoryczną (required_info / forbidden_additions)
@@ -22,7 +22,7 @@ from openpyxl.utils import get_column_letter
 from thelpy_rag import config
 from thelpy_rag.llm import generate
 from thelpy_rag.loader import to_seconds
-from thelpy_rag.search import Retriever, build_filter
+from thelpy_rag.search import Retriever, build_context, build_filter
 from thelpy_rag.store import get_client
 
 
@@ -83,9 +83,7 @@ def run_benchmark(questions: list[dict], session: str, strategy: str = "turns8",
         if not hits:
             raise LookupError(f"Brak wyników: sesja {session} nie jest w kolekcji {collection}?")
 
-        contexts = [h.payload for h in hits]
-        if context_order == "chrono":
-            contexts.sort(key=lambda p: p["chunk_index"])
+        contexts = build_context(hits, order=context_order)
         res = generate(q["question"], contexts, model=model, formatter=formatter)
 
         evidence = q.get("evidence") or []

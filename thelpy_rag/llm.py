@@ -11,7 +11,10 @@ from .chunking import get_tokenizer
 SYSTEM_PROMPT = (
     "You are an assistant analysing psychotherapy session transcripts. "
     "Answer only on the basis of the provided fragments. Back every statement with a "
-    "reference in the format [session, turns]. If the fragments do not contain the answer, say so explicitly."
+    "reference in the format [session, turns]. If the fragments do not contain the answer, say so explicitly. "
+    "Retrieved fragments show their retrieval rank (1 = judged most relevant to the question) and score; "
+    "fragments marked as neighbouring context were added only to show what surrounds a retrieved fragment. "
+    "Treat rank as a hint, not as proof: decide by what the fragments actually say."
 )
 
 # chat template overhead (role tags, special tokens) not covered by the plain token count
@@ -22,11 +25,19 @@ class PromptTooLongError(ValueError):
     """The prompt does not fit into num_ctx — Ollama would silently truncate it."""
 
 
+def fragment_header(p: dict) -> str:
+    """[session, turns, date] + linia z rankingiem, jeśli payload przeszedł przez search.build_context."""
+    header = f"[{p['session_id']}, {p.get('turn_range')}, session date: {p.get('session_at')}]"
+    if "retrieval_rank" in p:
+        header += (f"\n(retrieval rank: {p['retrieval_rank']}/{p['retrieval_k']}, "
+                   f"score: {p['retrieval_score']:.4f})")
+    elif p.get("retrieval_neighbor"):
+        header += "\n(neighbouring context, not retrieved)"
+    return header
+
+
 def format_context(payloads: list[dict]) -> str:
-    blocks = []
-    for p in payloads:
-        blocks.append(f"[{p['session_id']}, {p.get('turn_range')}, session date: {p.get('session_at')}]\n{p['text']}")
-    return "\n\n---\n\n".join(blocks)
+    return "\n\n---\n\n".join(f"{fragment_header(p)}\n{p['text']}" for p in payloads)
 
 
 def build_messages(question: str, payloads: list[dict], formatter=None) -> list[dict]:

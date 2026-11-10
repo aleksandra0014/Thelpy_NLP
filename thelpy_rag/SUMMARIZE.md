@@ -30,22 +30,22 @@ Opis modułu [`thelpy_rag/summarize.py`](summarize.py) oraz tego, jak korzystaj�
 
 ## 1. Po co i czym różni się od pytań RAG
 
-`/ask-session` odpowiada na **pytanie**. Pytanie jest zamieniane na embedding, a wyszukiwanie dense
+`/ask` odpowiada na **pytanie**. Pytanie jest zamieniane na embedding, a wyszukiwanie dense
 zwraca top-k (np. 5) najbardziej podobnych chunków. Do pytania o konkretny fakt to wystarcza, ale
 do podsumowania już nie, bo 5 chunków to tylko kawałek sesji, a reszta w ogóle nie trafia do modelu.
 
 `/summarize-session` przyjmuje sesję tak samo (plik, JSON albo samo `session_id` już wgranej sesji,
-`n_turns`, `topics`, `topic`), ale:
+`strategy`, `skip_ingest`, `topics`, `topic`), ale:
 
 - **nie wyszukuje**. Pobiera **wszystkie** chunki sesji po metadanych (`session_id`, opcjonalnie
   temat) i układa je w kolejności rozmowy (`chunk_index`),
 - streszcza je metodą **map-reduce** (w LangChain/LlamaIndex: `map_reduce` / `tree_summarize`),
   bo cała sesja zwykle nie mieści się w oknie modelu (domyślnie 8192 tokeny).
 
-| | `/ask-session` | `/summarize-session` |
+| | `/ask` | `/summarize-session` |
 |---|---|---|
 | wejście | sesja + `question` + `k` | sesja (+ opcjonalnie `focus`) |
-| wybór chunków | wyszukiwanie dense, top-k | wszystkie chunki sesji, po `chunk_index` |
+| wybór chunków | wyszukiwanie (domyślnie dense), top-k | wszystkie chunki sesji, po `chunk_index` |
 | wywołania LLM | 1 | 1 (stuff) albo kilka (map-reduce) |
 | wynik | odpowiedź z odwołaniami | podsumowanie w stałych sekcjach + kroki pośrednie |
 
@@ -55,7 +55,7 @@ do podsumowania już nie, bo 5 chunków to tylko kawałek sesji, a reszta w ogó
 
 ```
 sesja (plik / JSON / session_id)
-        │  prepare_session: ewentualny ingest do thelpy_turns<n>
+        │  resolve_source: ewentualny ingest do thelpy_<strategy>
         ▼
 Qdrant scroll, filtr session_id (+ temat)  ──►  wszystkie chunki, sortowanie po chunk_index
         │
@@ -84,15 +84,14 @@ a streszczenia są łączone w porządku chronologicznym.
 
 ## 3. Krok 1: przygotowanie sesji i pobranie chunków
 
-**Przygotowanie** (`prepare_session` w `thelpy_api/service.py`, wspólne z `/ask-session`):
+**Przygotowanie** (`resolve_source` w `thelpy_api/service.py`, wspólne z `/ask` i `/session-keywords`):
 
-1. Strategia chunkingu to `turns<n_turns>` (z `_ov<overlap_turns>`, jeśli overlap > 0), a kolekcja
-   to `thelpy_turns<n_turns>`.
+1. Kolekcja to `thelpy_<strategy>` (domyślnie `turns8`; np. `turns6_ov2` dla overlapu).
 2. Sesja przysłana jako JSON jest zapisywana do `data/uploads/<session_id>.json`. Sesja podana jako
    `file` jest czytana z dysku serwera.
 3. Bez `skip_ingest` sesja z `file` / `session` jest wgrywana do kolekcji (z `topics: true` najpierw
-   anotowana tematami).
-   **Samo `session_id`** (bez `file` i `session`) oznacza użycie gotowych chunków z kolekcji, bez wgrywania.
+   anotowana tematami), a jej `session_id` staje się filtrem.
+   **`skip_ingest: true` albo samo `session_id`** oznacza użycie gotowych chunków z kolekcji, bez wgrywania.
    Jeśli sesji tam nie ma, endpoint zwraca 404 z podpowiedzią (`GET /collections/{strategy}/sessions`).
 4. Jeśli kolekcja nie istnieje, endpoint zwraca błąd 404.
 
@@ -361,7 +360,7 @@ Lista `warnings` w wyniku (w CLI jako `UWAGA: …`, w API jako pole JSON):
 
 | Ostrzeżenie | Kiedy | Co zrobić |
 |---|---|---|
-| `N tur występuje w kilku chunkach (overlap)…` | strategia z `overlap_turns > 0`: te same tury są w dwóch chunkach i model może je streścić dwa razy | użyj `overlap_turns: 0` (domyślne) |
+| `N tur występuje w kilku chunkach (overlap)…` | strategia z overlapem (`turnsN_ovM`): te same tury są w dwóch chunkach i model może je streścić dwa razy | użyj strategii bez overlapu (domyślne `turns8`) |
 | `Odpowiedź dla tur X–Y obcięta na limicie N tokenów` | model doszedł do twardego limitu w kroku map/reduce/finał, więc koniec tego streszczenia przepadł | zwiększ `HARD_LIMIT_FACTOR` / `tokens` w `LENGTHS` albo zmniejsz `MAX_WORDS` |
 
 Poza listą `warnings` Python wypisuje na stderr ostrzeżenia z `llm.py` (`warnings.warn`).
@@ -457,10 +456,9 @@ Sesja `data/annomi_64.json`: 262 tury, strategia `turns8` daje 33 chunki po 8 tu
 | API | CLI | Domyślnie | Opis |
 |---|---|---|---|
 | `file` / `session` / `session_id` | `file` (pozycyjny) | — | sesja |
-| `n_turns` | `--n-turns` | 8 | tur w chunku (kolekcja `thelpy_turns<n>`) |
-| `overlap_turns` | `--overlap-turns` | 0 | overlap (niezalecany przy podsumowaniu) |
+| `strategy` | `--n-turns`, `--overlap-turns` | `turns8` | kolekcja `thelpy_<strategy>`; overlap (`turnsN_ovM`) niezalecany przy podsumowaniu |
 | `model` | `--model` | `LLM_MODEL` | model Ollamy |
-| `skip_ingest` | `--skip-ingest` | false | przy `file` / `session`: nie wgrywaj ponownie (w API samo `session_id` i tak nie wgrywa) |
+| `skip_ingest` | `--skip-ingest` | false | przy `file` / `session`: nie wgrywaj (session_id brany z pliku); samo `session_id` nigdy nie wgrywa |
 | `topics` | `--topics` | false | wgraj z tematami, pokaż tematy w nagłówkach chunków |
 | `topic` | `--topic` | — | podsumuj tylko chunki z tym tematem (włącza `topics`) |
 | `length` | `--length` | full | `full` (sekcje, ok. 600 słów) albo `brief` (3–5 zdań) |
@@ -509,7 +507,7 @@ Sesja `data/annomi_64.json`: 262 tury, strategia `turns8` daje 33 chunki po 8 tu
   limity są ustawione z zapasem.
 - **Filtr `topic` daje fragmenty nieciągłe.** Zakres `T001–T262` w promptach oznacza wtedy
   „od pierwszego do ostatniego wybranego chunka”, a nie całą ciągłą rozmowę.
-- **Overlap powtarza tury.** Przy `overlap_turns > 0` te same wypowiedzi trafiają do dwóch
+- **Overlap powtarza tury.** Przy strategii z overlapem te same wypowiedzi trafiają do dwóch
   chunków (jest na to ostrzeżenie).
 - **Czas** rośnie z liczbą wywołań. Wywołania na jednym poziomie są wykonywane po kolei, nie równolegle.
 

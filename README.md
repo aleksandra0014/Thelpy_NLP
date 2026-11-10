@@ -32,14 +32,14 @@ python -m thelpy_api            # http://127.0.0.1:8000/docs  (albo: uvicorn the
 | `DELETE /collections/{strategy}/sessions/{id}` | — | |
 | `POST /ingest`, `POST /ingest/upload` | `scripts.ingest` | `topics: true` |
 | `POST /search` | `scripts.search` | `topic` |
-| `POST /ask` | `scripts.ask` | `topics`, `topic` |
-| `POST /ask-session` | `scripts.ask_session` | `topics`, `topic` |
+| `POST /ask` | `scripts.ask` (opcjonalny ingest: `file` / `session`, `skip_ingest`; CLI: `--file`, `--skip-ingest`) | `topics`, `topic` |
+| `POST /ask/upload`, `/summarize-session/upload`, `/session-keywords/upload` | to samo z plikiem sesji jako załącznikiem (`-F upload=@plik.json`) | `topics`, `topic` |
 | `POST /summarize-session` | `scripts.summarize_session` (map-reduce całej sesji) | `topics`, `topic` |
 | `POST /session-keywords` | `scripts.session_keywords` (keywordy: słownik + wolne frazy, bez LLM) | `topic` |
 | `POST /benchmark-session` | `scripts.benchmark_session` (`xlsx: true` → plik) | `topics`, `topic` |
 | `POST /evaluate` | `scripts.evaluate` | |
 
 ```bash
-curl -X POST localhost:8000/ask-session -H 'Content-Type: application/json' \
+curl -X POST localhost:8000/ask -H 'Content-Type: application/json' \
   -d '{"session_id": "64", "question": "What does he say about his friends?", "topic": "friends"}'
 ```

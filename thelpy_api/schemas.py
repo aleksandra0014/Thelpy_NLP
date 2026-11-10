@@ -59,62 +59,76 @@ class SearchRequest(BaseModel):
     topic: Optional[str] = Field(None, description=TOPIC_HELP)
 
 
-class AskRequest(BaseModel):
-    """scripts/ask.py — wyszukanie + odpowiedź LLM."""
-    question: str
-    strategy: str = Field("turns4", description=STRATEGY_HELP)
-    mode: Mode = "hybrid"
-    k: int = Field(5, ge=1, le=100)
-    fusion: Fusion = "client"
-    session: Optional[str] = None
-    client: Optional[str] = None
-    neighbors: int = Field(0, ge=0)
-    model: str = config.LLM_MODEL
-    topics: bool = Field(False, description="pokaż LLM-owi tematy każdego fragmentu")
-    topic: Optional[str] = Field(None, description=TOPIC_HELP + "; włącza topics")
-    include_prompt: bool = Field(False, description="zwróć pełny prompt (messages)")
+def _blank_to_none(v):
+    """Swagger (/docs) wysyła puste "" i {} dla nieużywanych pól — traktuj je jak niepodane."""
+    return None if v in ("", {}) or (isinstance(v, str) and not v.strip()) else v
 
 
-class SessionInput(BaseModel):
-    """Wspólne wejście dla operacji na jednej sesji (ask-session, summarize-session)."""
+class SessionSource(BaseModel):
+    """Wspólne wejście sesji dla /ask, /summarize-session i /session-keywords.
+
+    - file albo session + skip_ingest=false (domyślnie): sesja jest wgrywana do kolekcji strategii,
+      a jej session_id staje się filtrem,
+    - skip_ingest=true albo brak file/session: nic nie jest wgrywane, praca po filtrach (session_id, ...).
+    """
     file: Optional[str] = Field(None, description="ścieżka pliku .json sesji na serwerze")
     session: Optional[dict[str, Any]] = Field(None, description="sesja JSON wprost w zapytaniu")
-    session_id: Optional[str] = Field(None, description="sesja już wgrana: samo session_id (bez file/session) "
-                                      "bierze gotowe chunki z kolekcji, bez wgrywania")
-    n_turns: int = Field(8, ge=1, description="liczba tur w chunku")
-    overlap_turns: int = Field(0, ge=0)
-    model: str = config.LLM_MODEL
-    skip_ingest: bool = Field(False, description="przy file / session: nie wgrywaj ponownie (sesja już jest w "
-                                                 "kolekcji); przy samym session_id bez znaczenia")
+    skip_ingest: bool = Field(False, description="true = nie wgrywaj file / session, pracuj na tym, co już jest "
+                                                 "w kolekcji (session_id brany z pliku)")
+    session_id: Optional[str] = Field(None, description="filtr: jedna sesja (przy file / session brany z pliku)")
+    strategy: str = Field("turns8", description=STRATEGY_HELP)
     topics: bool = Field(False, description="wgraj sesję z tematami i pokaż tematy LLM-owi")
     topic: Optional[str] = Field(None, description=TOPIC_HELP + "; włącza topics")
 
     @field_validator("file", "session", "session_id", "topic", mode="before")
     @classmethod
     def _empty_is_none(cls, v):
-        """Swagger (/docs) wysyła puste "" i {} dla nieużywanych pól — traktuj je jak niepodane."""
-        return None if v in ("", {}) or (isinstance(v, str) and not v.strip()) else v
+        return _blank_to_none(v)
 
     @model_validator(mode="after")
-    def _need_session(self):
-        if not (self.file or self.session or self.session_id):
-            raise ValueError("Podaj session_id (sesja już wgrana) albo file / session (wgranie i użycie)")
+    def _one_source(self):
+        if self.file and self.session:
+            raise ValueError("Podaj file albo session, nie oba")
         return self
 
     @property
-    def uses_existing(self) -> bool:
-        """Samo session_id (bez file/session): użyj chunków już wgranych do kolekcji, bez ingestu."""
-        return not (self.file or self.session)
+    def has_source(self) -> bool:
+        return bool(self.file or self.session)
 
 
-class AskSessionRequest(SessionInput):
-    """scripts/ask_session.py — (wgranie) jednej sesji, dense, odpowiedź LLM z diagnostyką."""
+class SingleSessionSource(SessionSource):
+    """Operacje na jednej sesji (podsumowanie, keywordy): potrzebne session_id albo file / session."""
+
+    @model_validator(mode="after")
+    def _need_session(self):
+        if not (self.has_source or self.session_id):
+            raise ValueError("Podaj session_id (sesja już wgrana) albo file / session")
+        return self
+
+
+class AskRequest(SessionSource):
+    """Pytanie + odpowiedź LLM ze źródłami: opcjonalne wgranie sesji, potem wyszukanie po filtrach."""
     question: str
-    k: int = Field(5, ge=1, le=100, description="liczba fragmentów przekazanych do LLM")
+    client_id: Optional[str] = Field(None, description="filtr: wszystkie sesje jednego klienta")
+    role: Optional[str] = Field(None, description="filtr: chunki z wypowiedzią tej roli (np. client)")
+    date_from: Optional[str] = Field(None, description="ISO data/czas, filtr session_at >=")
+    date_to: Optional[str] = Field(None, description="ISO data/czas, filtr session_at <=")
+    mode: Mode = "dense"
+    k: int = Field(5, ge=1, le=100, description="liczba trafień (fragmentów) przekazanych do LLM")
+    fusion: Fusion = Field("client", description="hybrid: RRF liczone lokalnie albo w Qdrancie")
+    neighbors: int = Field(0, ge=0, description="dołącz N sąsiednich chunków z każdej strony trafienia")
+    model: str = config.LLM_MODEL
+    include_prompt: bool = Field(False, description="zwróć pełny prompt (messages)")
+
+    @field_validator("client_id", "role", "date_from", "date_to", mode="before")
+    @classmethod
+    def _empty_filter(cls, v):
+        return _blank_to_none(v)
 
 
-class SummarizeSessionRequest(SessionInput):
+class SummarizeSessionRequest(SingleSessionSource):
     """scripts/summarize_session.py — podsumowanie całej sesji (map-reduce po chunkach w kolejności)."""
+    model: str = config.LLM_MODEL
     length: Literal["full", "brief", "all"] = Field(
         "full", description="full: Markdown w 5 sekcjach (~600 słów) z odwołaniami do tur; brief: 3-5 zdań "
                             "(~80 słów); all: oba — map-reduce raz, osobny finał na wariant (pole summaries)")
@@ -129,7 +143,7 @@ class SummarizeSessionRequest(SessionInput):
         return None if isinstance(v, str) and not v.strip() else v
 
 
-class SessionKeywordsRequest(SessionInput):
+class SessionKeywordsRequest(SingleSessionSource):
     """scripts/session_keywords.py — keywordy sesji bez LLM: hasła ze słownika + wolne frazy (KeyBERT-style)."""
     top_n: int = Field(10, ge=1, le=200, description="ile haseł ze słownika zwrócić")
     free_top_n: int = Field(10, ge=0, le=100, description="ile wolnych fraz zwrócić (0 = pomiń, szybciej)")

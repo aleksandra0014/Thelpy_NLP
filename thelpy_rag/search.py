@@ -36,6 +36,36 @@ def build_filter(session_id: str | None = None, client_id: str | None = None,
     return models.Filter(must=must) if must else None
 
 
+def build_context(hits: list[Hit], neighbors_fn=None, order: str = "chrono") -> list[dict]:
+    """Trafienia -> payloady dla LLM (kopie) z informacją o rankingu.
+
+    Każde trafienie dostaje retrieval_rank (1 = najlepsze), retrieval_score i retrieval_k.
+    neighbors_fn: opcjonalnie Hit -> list[payload] (np. sąsiedzi); dołożone chunki, które same
+    nie są trafieniami, dostają retrieval_neighbor=True. Duplikaty (po chunk_id) są usuwane.
+    order: "chrono" (sesja, chunk_index) albo "score" (kolejność rankingu).
+    """
+    ranked = {h.payload["chunk_id"]: (rank, h.score) for rank, h in enumerate(hits, 1)}
+    seen, ctx = set(), []
+    for h in hits:
+        for p in (neighbors_fn(h) if neighbors_fn else [h.payload]):
+            cid = p["chunk_id"]
+            if cid in seen:
+                continue
+            seen.add(cid)
+            p = dict(p)
+            if cid in ranked:
+                p["retrieval_rank"], p["retrieval_score"] = ranked[cid]
+                p["retrieval_k"] = len(hits)
+            else:
+                p["retrieval_neighbor"] = True
+            ctx.append(p)
+    if order == "chrono":
+        ctx.sort(key=lambda p: (p.get("session_at") or "", p["session_id"], p["chunk_index"]))
+    elif order != "score":
+        raise ValueError(f"Nieznana kolejność kontekstu: {order} (chrono | score)")
+    return ctx
+
+
 def _to_hits(points) -> list[Hit]:
     return [Hit(id=str(p.id), score=p.score, payload=p.payload or {}) for p in points]
 

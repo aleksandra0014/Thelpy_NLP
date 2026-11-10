@@ -72,7 +72,7 @@ def format_context_with_topics(payloads):
     """Return the fragments for the LLM like thelpy_rag does, with the topics of every fragment in its header."""
     blocks = []
     for payload in payloads:
-        header = f"[{payload['session_id']}, {payload.get('turn_range')}, session date: {payload.get('session_at')}]"
+        header = llm.fragment_header(payload)
         note = topic_note(payload)
         if note:
             header = header + f"\n({note})"

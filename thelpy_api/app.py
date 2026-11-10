@@ -14,11 +14,12 @@ import json
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.openapi.utils import get_openapi
+from pydantic import Field, create_model
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from starlette.background import BackgroundTask
@@ -170,6 +171,13 @@ def ingest(body: schemas.IngestRequest, request: Request):
     return service.ingest(body, res(request))
 
 
+def read_json_upload(f: UploadFile) -> dict:
+    try:
+        return json.loads(f.file.read().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise HTTPException(400, f"{f.filename}: niepoprawny JSON ({e})")
+
+
 @app.post("/ingest/upload", tags=["ingest"])
 def ingest_upload(request: Request, files: list[UploadFile] = File(..., description="pliki .json sesji"),
                   strategies: Optional[list[str]] = Form(None, description="puste = wszystkie; "
@@ -177,12 +185,7 @@ def ingest_upload(request: Request, files: list[UploadFile] = File(..., descript
                   topics: bool = Form(False), dry_run: bool = Form(False), show: int = Form(0)):
     """To samo co /ingest, ale z plikami wysłanymi jako multipart/form-data."""
     strategies = [s for s in (strategies or []) if s.strip()] or list(config.STRATEGIES)
-    sessions = []
-    for f in files:
-        try:
-            sessions.append(json.loads(f.file.read().decode("utf-8")))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            raise HTTPException(400, f"{f.filename}: niepoprawny JSON ({e})")
+    sessions = [read_json_upload(f) for f in files]
     body = schemas.IngestRequest(sessions=sessions, strategies=strategies, topics=topics,
                                  dry_run=dry_run, show=show)
     return service.ingest(body, res(request))
@@ -197,28 +200,62 @@ def search(body: schemas.SearchRequest, request: Request):
 
 @app.post("/ask", tags=["query"])
 def ask(body: schemas.AskRequest, request: Request):
-    """scripts/ask.py — wyszukanie + odpowiedź LLM ze źródłami."""
+    """Pytanie + odpowiedź LLM ze źródłami. Z `file` / `session` sesja jest najpierw wgrywana
+    (chyba że `skip_ingest=true`); potem wyszukanie po filtrach (`session_id`, `client_id`, daty, `topic`)."""
     return service.ask(body, res(request))
-
-
-@app.post("/ask-session", tags=["query"])
-def ask_session(body: schemas.AskSessionRequest, request: Request):
-    """scripts/ask_session.py — (wgranie) jednej sesji, dense, prompt, odpowiedź i tokeny."""
-    return service.ask_session(body, res(request))
 
 
 @app.post("/summarize-session", tags=["query"])
 def summarize_session(body: schemas.SummarizeSessionRequest, request: Request):
-    """scripts/summarize_session.py — (wgranie) jednej sesji i podsumowanie map-reduce wszystkich chunków
+    """scripts/summarize_session.py — (wgranie, jak w /ask) jednej sesji i podsumowanie map-reduce wszystkich chunków
     w kolejności chronologicznej (bez wyszukiwania); opcjonalnie tylko chunki z tematem `topic`."""
     return service.summarize_session(body, res(request))
 
 
 @app.post("/session-keywords", tags=["query"])
 def session_keywords(body: schemas.SessionKeywordsRequest, request: Request):
-    """scripts/session_keywords.py — keywordy sesji bez LLM: hasła ze słownika (dosłowne trafienia +
+    """scripts/session_keywords.py — (wgranie, jak w /ask) keywordy sesji bez LLM: hasła ze słownika (dosłowne trafienia +
     podobieństwo embeddingów do chunków) oraz wolne frazy z transkryptu (KeyBERT-style, MMR)."""
     return service.session_keywords(body, res(request))
+
+
+# --- te same zapytania z plikiem sesji wysłanym jako multipart/form-data -------------
+def upload_form(model: type) -> type:
+    """Formularz multipart: pole `upload` (plik .json sesji) + wszystkie pola `model` poza file / session."""
+    fields = {n: (f.annotation, f) for n, f in model.model_fields.items() if n not in ("file", "session")}
+    return create_model(model.__name__.removesuffix("Request") + "Upload",
+                        upload=(UploadFile, Field(description="plik .json sesji (format thelpy_rag/loader.py)")),
+                        **fields)
+
+
+def from_upload(model: type, form):
+    """Formularz -> zwykłe zapytanie JSON-owe z sesją z pliku (walidatory modelu działają jak w JSON)."""
+    return model(session=read_json_upload(form.upload), **form.model_dump(exclude={"upload"}))
+
+
+MULTIPART = "multipart/form-data"
+AskUpload = upload_form(schemas.AskRequest)
+SummarizeSessionUpload = upload_form(schemas.SummarizeSessionRequest)
+SessionKeywordsUpload = upload_form(schemas.SessionKeywordsRequest)
+
+
+@app.post("/ask/upload", tags=["query"])
+def ask_upload(form: Annotated[AskUpload, Form(media_type=MULTIPART)], request: Request):
+    """To samo co /ask, ale sesja jako załączony plik .json (z `skip_ingest=true` plik służy tylko do
+    odczytania session_id)."""
+    return service.ask(from_upload(schemas.AskRequest, form), res(request))
+
+
+@app.post("/summarize-session/upload", tags=["query"])
+def summarize_session_upload(form: Annotated[SummarizeSessionUpload, Form(media_type=MULTIPART)], request: Request):
+    """To samo co /summarize-session, ale sesja jako załączony plik .json."""
+    return service.summarize_session(from_upload(schemas.SummarizeSessionRequest, form), res(request))
+
+
+@app.post("/session-keywords/upload", tags=["query"])
+def session_keywords_upload(form: Annotated[SessionKeywordsUpload, Form(media_type=MULTIPART)], request: Request):
+    """To samo co /session-keywords, ale sesja jako załączony plik .json."""
+    return service.session_keywords(from_upload(schemas.SessionKeywordsRequest, form), res(request))
 
 
 # --- ewaluacja ------------------------------------------------------------------

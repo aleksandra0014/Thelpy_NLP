@@ -6,7 +6,7 @@ from .chunking import chunk_session
 from .embeddings import OllamaEmbedder
 from .llm import answer
 from .loader import iter_session_files, load_session
-from .search import Retriever, build_filter
+from .search import Retriever, build_context, build_filter
 from .sparse import BM25Encoder
 from .store import create_collection, delete_session, get_client, upsert_chunks
 
@@ -76,17 +76,8 @@ def query(question: str, strategy: str, mode: str = "hybrid", k: int = 5,
     kw = {"fusion": fusion} if mode == "hybrid" else {}
     hits = r.search(name, question, mode, k, build_filter(session_id, client_id), **kw)
 
-    contexts = []
-    if neighbors:
-        seen = set()
-        for h in hits:
-            for p in r.neighbors(name, h, neighbors):
-                if p["chunk_id"] not in seen:
-                    seen.add(p["chunk_id"])
-                    contexts.append(p)
-        contexts.sort(key=lambda p: (p.get("session_at") or "", p["session_id"], p["chunk_index"]))
-    else:
-        contexts = [h.payload for h in hits]
+    nb = (lambda h: r.neighbors(name, h, neighbors)) if neighbors else None
+    contexts = build_context(hits, nb)
 
     result = {"question": question, "strategy": strategy, "mode": mode, "hits": hits, "contexts": contexts}
     if ask_llm:

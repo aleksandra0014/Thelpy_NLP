@@ -23,7 +23,7 @@ from thelpy_rag.embeddings import OllamaEmbedder
 from thelpy_rag.llm import generate
 from thelpy_rag.loader import iter_session_files, load_session, session_from_dict
 from thelpy_rag.pipeline import resolve_strategy
-from thelpy_rag.search import Hit, Retriever, build_filter
+from thelpy_rag.search import Hit, Retriever, build_context, build_filter
 from thelpy_rag.sparse import BM25Encoder
 from thelpy_rag.store import create_collection, delete_session, get_client, upsert_chunks
 from thelpy_rag.summarize import fetch_chunks, summarize
@@ -146,7 +146,9 @@ def hit_dict(h: Hit, score_name: str = "score") -> dict:
 def source(p: dict) -> dict:
     return {"session_id": p["session_id"], "chunk_index": p["chunk_index"], "turn_range": p.get("turn_range"),
             "session_at": p.get("session_at"), "start_seconds": p.get("start_seconds"),
-            "end_seconds": p.get("end_seconds"), "topic_note": topic_note(p)}
+            "end_seconds": p.get("end_seconds"), "topic_note": topic_note(p),
+            "retrieval_rank": p.get("retrieval_rank"), "retrieval_score": p.get("retrieval_score"),
+            "retrieval_neighbor": p.get("retrieval_neighbor", False)}
 
 
 def llm_result(res: dict, include_prompt: bool) -> dict:
@@ -295,87 +297,67 @@ def search(req: schemas.SearchRequest, res: Resources) -> dict:
     return {"collection": collection, "mode": req.mode, "topic": req.topic, "count": len(out), "hits": out}
 
 
-# --- ask (scripts/ask.py) ---------------------------------------------------------
-def ask(req: schemas.AskRequest, res: Resources) -> dict:
-    topics = req.topics or bool(req.topic)
+# --- wejście sesji (wspólne dla ask / summarize_session / session_keywords) --------
+def resolve_source(req: schemas.SessionSource, res: Resources) -> tuple[str | None, str, bool]:
+    """(Wgranie) sesji -> (session_id | None, collection, ingested).
+
+    file / session + skip_ingest=false: wgranie do kolekcji strategii; session_id brany z pliku.
+    skip_ingest=true albo brak file / session: nic nie jest wgrywane, zostaje filtr session_id (jeśli podany).
+    """
+    check_topic(req.topic)
     strategy = strategy_name(req.strategy)
     collection = config.collection_name(strategy)
+    session_id, ingested = req.session_id, False
+
+    if req.has_source:
+        path = save_session(req.session) if req.session else server_path(req.file)
+        file_sid = load_session(path).session_id
+        if session_id and session_id != file_sid:
+            raise ValueError(f"session_id={session_id} nie zgadza się z sesją z file / session ({file_sid})")
+        session_id = file_sid
+        if not req.skip_ingest:
+            ingest(schemas.IngestRequest(paths=[str(path)], strategies=[strategy],
+                                         topics=req.topics or bool(req.topic)), res)
+            ingested = True
+
     require_collection(res, collection)
-    flt = apply_topic(build_filter(req.session, req.client), req.topic)
-    kw = {"fusion": req.fusion} if req.mode == "hybrid" else {}
-    hits = res.retriever.search(collection, req.question, req.mode, req.k, flt, **kw)
-
-    # kontekst: trafienia (+ ewentualnie sąsiedzi), bez duplikatów, w porządku chronologicznym
-    seen, ctx = set(), []
-    for h in hits:
-        for p in (res.retriever.neighbors(collection, h, req.neighbors) if req.neighbors else [h.payload]):
-            if p["chunk_id"] not in seen:
-                seen.add(p["chunk_id"])
-                ctx.append(p)
-    ctx.sort(key=lambda p: (p.get("session_at") or "", p["session_id"], p["chunk_index"]))
-
-    out = {"question": req.question, "collection": collection, "mode": req.mode, "topic": req.topic,
-           "hits": [{"score": h.score, **source(h.payload)} for h in hits], "sources": [source(p) for p in ctx]}
-    if not ctx:
-        return {**out, "answer": None, "detail": "Brak pasujących fragmentów — LLM nie został wywołany"}
-    gen = generate(req.question, ctx, model=req.model, formatter=formatter(topics))
-    return {**out, **llm_result(gen, req.include_prompt)}
-
-
-# --- ask_session (scripts/ask_session.py) ---------------------------------------
-def prepare_session(req: schemas.SessionInput, res: Resources) -> tuple[str, str, bool]:
-    """Wspólny początek ask_session / summarize_session: (wgranie) sesji -> (session_id, collection, ingested)."""
-    check_topic(req.topic)
-    topics = req.topics or bool(req.topic)
-    strategy = resolve_strategy("turns", n_turns=req.n_turns, overlap_turns=req.overlap_turns)
-    collection = config.collection_name(strategy)
-
-    # samo session_id -> gotowe chunki z kolekcji, bez wgrywania
-    if req.uses_existing:
-        require_collection(res, collection)
-        n = res.client.count(collection, count_filter=build_filter(session_id=req.session_id), exact=True).count
+    if session_id and not ingested:
+        n = res.client.count(collection, count_filter=build_filter(session_id=session_id), exact=True).count
         if not n:
-            raise LookupError(f"Sesji {req.session_id} nie ma w kolekcji {collection} — wgraj ją (POST /ingest "
-                              f"albo podaj file / session) lub sprawdź GET /collections/{strategy}/sessions")
-        return req.session_id, collection, False
-
-    path = save_session(req.session) if req.session else server_path(req.file)
-    session_id = load_session(path).session_id
-
-    ingested = False
-    if not req.skip_ingest:
-        ingest(schemas.IngestRequest(paths=[str(path)], strategies=[strategy], topics=topics), res)
-        ingested = True
-    require_collection(res, collection)
+            raise LookupError(f"Sesji {session_id} nie ma w kolekcji {collection} — wgraj ją (podaj file / session "
+                              f"bez skip_ingest albo POST /ingest) lub sprawdź GET /collections/{strategy}/sessions")
     return session_id, collection, ingested
 
 
-def ask_session(req: schemas.AskSessionRequest, res: Resources) -> dict:
+# --- ask (scripts/ask.py) ----------------------------------
+def ask(req: schemas.AskRequest, res: Resources) -> dict:
     topics = req.topics or bool(req.topic)
-    session_id, collection, ingested = prepare_session(req, res)
+    session_id, collection, ingested = resolve_source(req, res)
+    flt = apply_topic(build_filter(session_id, req.client_id, req.role, req.date_from, req.date_to), req.topic)
+    kw = {"fusion": req.fusion} if req.mode == "hybrid" else {}
+    hits = res.retriever.search(collection, req.question, req.mode, req.k, flt, **kw)
 
-    # --- retrieval (dense, tylko ta sesja) ---
-    flt = apply_topic(build_filter(session_id=session_id), req.topic)
-    hits = res.retriever.search(collection, req.question, "dense", req.k, flt)
-    out = {"question": req.question, "session_id": session_id, "collection": collection, "ingested": ingested,
-           "topic": req.topic, "hits": [hit_dict(h, "cosine") for h in hits],
-           "question_tokens": get_tokenizer().count(req.question), "tokenizer": config.TOKENIZER_NAME}
-    if not hits:
+    # kontekst: trafienia z rangą/score (+ ewentualnie sąsiedzi), bez duplikatów, w porządku chronologicznym
+    nb = (lambda h: res.retriever.neighbors(collection, h, req.neighbors)) if req.neighbors else None
+    ctx = build_context(hits, nb)
+
+    out = {"question": req.question, "session_id": session_id, "client_id": req.client_id,
+           "collection": collection, "ingested": ingested, "mode": req.mode, "topic": req.topic,
+           "question_tokens": get_tokenizer().count(req.question),
+           "hits": [{"score": h.score, **source(h.payload), "text": h.payload["text"]} for h in hits], "sources": [source(p) for p in ctx]}
+    if not ctx:
         detail = (f"Brak chunków z tematem '{req.topic}' (kolekcja wgrana z topics? klucz z taxonomy.py?)"
-                  if req.topic else f"Brak chunków sesji {session_id} w {collection}")
-        return {**out, "answer": None, "detail": detail}
-
-    # --- LLM ---
-    contexts = sorted((h.payload for h in hits), key=lambda p: p["chunk_index"])
-    gen = generate(req.question, contexts, model=req.model, formatter=formatter(topics))
-    return {**out, **llm_result(gen, include_prompt=True)}
+                  if req.topic else "Brak pasujących fragmentów")
+        return {**out, "answer": None, "detail": detail + " — LLM nie został wywołany"}
+    gen = generate(req.question, ctx, model=req.model, formatter=formatter(topics))
+    return {**out, **llm_result(gen, req.include_prompt)}
 
 
 # --- summarize_session (scripts/summarize_session.py) ---------------------------
 def summarize_session(req: schemas.SummarizeSessionRequest, res: Resources) -> dict:
     """Wszystkie chunki sesji (po metadanych, nie wyszukiwaniem) -> map-reduce LLM."""
     topics = req.topics or bool(req.topic)
-    session_id, collection, ingested = prepare_session(req, res)
+    session_id, collection, ingested = resolve_source(req, res)
 
     flt = apply_topic(build_filter(session_id=session_id), req.topic)
     payloads = fetch_chunks(res.client, collection, flt)
@@ -397,7 +379,7 @@ def summarize_session(req: schemas.SummarizeSessionRequest, res: Resources) -> d
 # --- session_keywords (scripts/session_keywords.py) -----------------------------
 def session_keywords(req: schemas.SessionKeywordsRequest, res: Resources) -> dict:
     """Wszystkie chunki sesji z wektorami (z Qdrant, bez ponownego embeddingu) -> keywordy, bez LLM."""
-    session_id, collection, ingested = prepare_session(req, res)
+    session_id, collection, ingested = resolve_source(req, res)
     flt = apply_topic(build_filter(session_id=session_id), req.topic)
     payloads = fetch_chunks(res.client, collection, flt, with_vectors=True)
     out = {"session_id": session_id, "collection": collection, "ingested": ingested, "topic": req.topic,
