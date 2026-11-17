@@ -6,6 +6,7 @@ bloków sąsiednich chunków (map) łączone hierarchicznie (reduce).
     python -m scripts.summarize_session data/annomi_64.json
     python -m scripts.summarize_session data/annomi_64.json --skip-ingest --focus "client's motivation to change"
     python -m scripts.summarize_session data/annomi_64.json --skip-ingest --max-block-tokens 800 --show-steps
+    python -m scripts.summarize_session data/pl_session_1.json --language pl
 
 Z tematami (thelpy_topics): --topics wgrywa sesję z tematami i pokazuje je LLM-owi,
 --topic podsumowuje tylko chunki z tym tematem albo podtematem (klucz z thelpy_topics/taxonomy.py).
@@ -38,6 +39,9 @@ def main():
     ap.add_argument("--length", choices=["full", "brief", "all"], default="full",
                     help="full: Markdown w sekcjach (~600 słów); brief: 3-5 zdań; all: oba (map-reduce raz)")
     ap.add_argument("--focus", help="na czym skupić podsumowanie")
+    ap.add_argument("-l", "--language", help='język podsumowania: kod ("pl", "en", ...) albo nazwa; domyślnie bez wymuszania')
+    ap.add_argument("--think", action="store_true", help="włącz rozumowanie qwena (wolniej, więcej tokenów)")
+    ap.add_argument("--show-thinking", action="store_true", help="pokaż myślenie modelu (z --think)")
     ap.add_argument("--max-block-tokens", type=int, help="zmniejsza blok map (wymusza map-reduce)")
     ap.add_argument("--show-steps", action="store_true", help="pokaż streszczenia cząstkowe")
     ap.add_argument("--topics", action="store_true", help="wgraj sesję z tematami i pokaż tematy LLM-owi")
@@ -79,7 +83,7 @@ def main():
 
     header("PRZEBIEG")
     res = summarize(payloads, model=args.model, formatter=formatter, focus=args.focus,
-                    max_block_tokens=args.max_block_tokens, length=args.length, log=lambda m: print(m, flush=True))
+                    max_block_tokens=args.max_block_tokens, length=args.length, language=args.language, think=args.think, log=lambda m: print(m, flush=True))
     for w in res["warnings"]:
         print(f"\nUWAGA: {w}")
 
@@ -88,6 +92,15 @@ def main():
         for s in res["steps"]:
             print(f"\n[poziom {s['level']}] tury {s['turn_range']} ({s['n_inputs']} wejść)")
             print(textwrap.indent(s["summary"], "   "))
+
+    if args.show_thinking:
+        for s in res["steps"]:
+            if s.get("thinking"):
+                header(f"MYŚLENIE  poziom {s['level']}, tury {s['turn_range']}")
+                print(s["thinking"])
+        for variant, text in res["thinking"].items():
+            header(f"MYŚLENIE  finał ({variant})")
+            print(text)
 
     for variant, text in res["summaries"].items():
         header(f"PODSUMOWANIE ({variant})  {res['model']} | {res['method']} | poziomy={res['levels']}")

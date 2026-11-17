@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Optional
@@ -20,7 +21,8 @@ import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.openapi.utils import get_openapi
 from pydantic import Field, create_model
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.routing import APIRoute
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from starlette.background import BackgroundTask
 
@@ -36,9 +38,33 @@ async def lifespan(app: FastAPI):
     app.state.res.client.close()
 
 
+class TimedRoute(APIRoute):
+    """Mierzy czas obsługi zapytania (walidacja + endpoint + serializacja): nagłówek X-Elapsed-S
+    w każdej udanej odpowiedzi, a w odpowiedziach JSON-owych będących obiektem także pole `elapsed_s`."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def timed(request: Request) -> Response:
+            start = time.perf_counter()
+            response = await handler(request)
+            elapsed = round(time.perf_counter() - start, 3)
+            if isinstance(response, JSONResponse):
+                data = json.loads(response.body)
+                if isinstance(data, dict):
+                    data["elapsed_s"] = elapsed
+                    response.body = response.render(data)
+                    response.headers["content-length"] = str(len(response.body))
+            response.headers["X-Elapsed-S"] = str(elapsed)
+            return response
+
+        return timed
+
+
 app = FastAPI(title="Thelpy RAG API", version="0.1.0", lifespan=lifespan,
               description="Wyszukiwanie i odpowiedzi LLM na transkrypcjach sesji terapeutycznych "
                           "(Qdrant + Ollama), z tematami z thelpy_topics.")
+app.router.route_class = TimedRoute     # przed definicją endpointów — dotyczy wszystkich poniżej
 
 
 def _openapi_with_file_inputs():

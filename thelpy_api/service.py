@@ -152,8 +152,10 @@ def source(p: dict) -> dict:
 
 
 def llm_result(res: dict, include_prompt: bool) -> dict:
-    out = {"model": res["model"], "answer": res["answer"],
+    out = {"model": res["model"], "think": res.get("think", False), "answer": res["answer"],
            "prompt_tokens": res["prompt_tokens"], "answer_tokens": res["answer_tokens"]}
+    if res.get("thinking"):
+        out["thinking"] = res["thinking"]
     if include_prompt:
         out["messages"] = res["messages"]
     return out
@@ -341,7 +343,7 @@ def ask(req: schemas.AskRequest, res: Resources) -> dict:
     nb = (lambda h: res.retriever.neighbors(collection, h, req.neighbors)) if req.neighbors else None
     ctx = build_context(hits, nb)
 
-    out = {"question": req.question, "session_id": session_id, "client_id": req.client_id,
+    out = {"question": req.question, "language": req.language, "session_id": session_id, "client_id": req.client_id,
            "collection": collection, "ingested": ingested, "mode": req.mode, "topic": req.topic,
            "question_tokens": get_tokenizer().count(req.question),
            "hits": [{"score": h.score, **source(h.payload), "text": h.payload["text"]} for h in hits], "sources": [source(p) for p in ctx]}
@@ -349,7 +351,8 @@ def ask(req: schemas.AskRequest, res: Resources) -> dict:
         detail = (f"Brak chunków z tematem '{req.topic}' (kolekcja wgrana z topics? klucz z taxonomy.py?)"
                   if req.topic else "Brak pasujących fragmentów")
         return {**out, "answer": None, "detail": detail + " — LLM nie został wywołany"}
-    gen = generate(req.question, ctx, model=req.model, formatter=formatter(topics))
+    gen = generate(req.question, ctx, model=req.model, formatter=formatter(topics), language=req.language,
+                   think=req.think)
     return {**out, **llm_result(gen, req.include_prompt)}
 
 
@@ -369,7 +372,7 @@ def summarize_session(req: schemas.SummarizeSessionRequest, res: Resources) -> d
         return {**out, "summary": None, "detail": detail}
 
     result = summarize(payloads, model=req.model, formatter=formatter(topics), focus=req.focus,
-                       max_block_tokens=req.max_block_tokens, length=req.length,
+                       max_block_tokens=req.max_block_tokens, length=req.length, language=req.language, think=req.think,
                        log=lambda m: log.info("[summarize %s] %s", session_id, m))
     if not req.include_steps:
         result.pop("steps")

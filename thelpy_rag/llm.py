@@ -17,6 +17,32 @@ SYSTEM_PROMPT = (
     "Treat rank as a hint, not as proof: decide by what the fragments actually say."
 )
 
+# kody języków -> nazwy dla promptu; inne wartości (np. "Polish", "polski") trafiają do promptu bez zmian
+LANGUAGES = {"pl": "Polish", "en": "English", "de": "German", "fr": "French", "es": "Spanish",
+             "it": "Italian", "uk": "Ukrainian", "ru": "Russian", "cs": "Czech"}
+
+
+def language_name(language: str | None) -> str | None:
+    """"pl" -> "Polish"; pełna nazwa bez zmian; None / pusty -> None (bez instrukcji języka)."""
+    if not language or not language.strip():
+        return None
+    language = language.strip()
+    return LANGUAGES.get(language.lower(), language)
+
+
+def language_note(language: str | None) -> str:
+    """Dopisek do promptu systemowego: w jakim języku pisać odpowiedź ("" = bez wymuszania)."""
+    name = language_name(language)
+    if not name:
+        return ""
+    return (f" Always write your answer in {name}, regardless of the language of the transcript or the question; "
+            f"quote the transcript in its original language only when citing it verbatim.")
+
+
+def system_prompt(base: str, language: str | None = None) -> str:
+    return base + language_note(language)
+
+
 # chat template overhead (role tags, special tokens) not covered by the plain token count
 TEMPLATE_OVERHEAD = 64
 
@@ -40,11 +66,12 @@ def format_context(payloads: list[dict]) -> str:
     return "\n\n---\n\n".join(f"{fragment_header(p)}\n{p['text']}" for p in payloads)
 
 
-def build_messages(question: str, payloads: list[dict], formatter=None) -> list[dict]:
-    """formatter: optional payloads -> context text (default: format_context, e.g. with topics)."""
+def build_messages(question: str, payloads: list[dict], formatter=None, language: str | None = None) -> list[dict]:
+    """formatter: optional payloads -> context text (default: format_context, e.g. with topics).
+    language: język odpowiedzi ("pl", "en", "Polish", ...); None = bez wymuszania (zwykle język pytania)."""
     context = (formatter or format_context)(payloads)
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt(SYSTEM_PROMPT, language)},
         {"role": "user", "content": f"Fragments:\n\n{context}\n\nQuestion: {question}"},
     ]
 
@@ -66,15 +93,16 @@ def check_prompt_fits(messages: list[dict], num_ctx: int, reserve: int = config.
 
 def chat(messages: list[dict], model: str = config.LLM_MODEL, url: str = config.OLLAMA_URL,
          temperature: float = config.LLM_TEMPERATURE, num_ctx: int = config.LLM_NUM_CTX,
-         num_predict: int | None = None) -> dict:
-    """Single Ollama /api/chat call -> {answer, prompt_tokens, answer_tokens}. No prompt-size check."""
+         num_predict: int | None = None, think: bool = False) -> dict:
+    """Single Ollama /api/chat call -> {answer, thinking, prompt_tokens, answer_tokens}. No prompt-size check.
+    think: tryb rozumowania (qwen3); tokeny myślenia wliczają się do answer_tokens i do num_predict."""
     options = {"temperature": temperature, "num_ctx": num_ctx}
     if num_predict:
         options["num_predict"] = num_predict
     r = requests.post(f"{url.rstrip('/')}/api/chat", timeout=600, json={
         "model": model,
         "stream": False,
-        "think": False,   # qwen3: disables reasoning mode; remove to enable it
+        "think": think,   # qwen3: tryb rozumowania (domyślnie wyłączony)
         "options": options,
         "messages": messages,
     })
@@ -91,6 +119,7 @@ def chat(messages: list[dict], model: str = config.LLM_MODEL, url: str = config.
                       f"and is cut off.")
     return {
         "answer": data["message"]["content"],
+        "thinking": data["message"].get("thinking") or None,   # tylko przy think=True
         "prompt_tokens": prompt_tokens,              # Ollama: whole prompt (system + fragments + question)
         "answer_tokens": data.get("eval_count") or 0,
         "truncated": data.get("done_reason") == "length",
@@ -99,12 +128,14 @@ def chat(messages: list[dict], model: str = config.LLM_MODEL, url: str = config.
 
 def generate(question: str, payloads: list[dict], model: str = config.LLM_MODEL,
              url: str = config.OLLAMA_URL, temperature: float = config.LLM_TEMPERATURE,
-             num_ctx: int = config.LLM_NUM_CTX, formatter=None) -> dict:
-    """Like answer(), but also returns the messages and Ollama's token counts."""
-    messages = build_messages(question, payloads, formatter)
-    check_prompt_fits(messages, num_ctx)
-    return {"model": model, "messages": messages,
-            **chat(messages, model=model, url=url, temperature=temperature, num_ctx=num_ctx)}
+             num_ctx: int = config.LLM_NUM_CTX, formatter=None, language: str | None = None,
+             think: bool = False) -> dict:
+    """Like answer(), but also returns the messages and Ollama's token counts.
+    think: włącza rozumowanie qwena; rezerwa na odpowiedź rośnie o LLM_THINK_RESERVE."""
+    messages = build_messages(question, payloads, formatter, language)
+    check_prompt_fits(messages, num_ctx, reserve=config.LLM_ANSWER_RESERVE + (config.LLM_THINK_RESERVE if think else 0))
+    return {"model": model, "messages": messages, "think": think,
+            **chat(messages, model=model, url=url, temperature=temperature, num_ctx=num_ctx, think=think)}
 
 
 def answer(question: str, payloads: list[dict], **kw) -> str:

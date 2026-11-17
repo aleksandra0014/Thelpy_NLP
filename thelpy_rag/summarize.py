@@ -16,7 +16,7 @@ from qdrant_client import QdrantClient
 
 from . import config
 from .chunking import get_tokenizer
-from .llm import TEMPLATE_OVERHEAD, chat, check_prompt_fits, format_context
+from .llm import TEMPLATE_OVERHEAD, chat, check_prompt_fits, format_context, language_name, system_prompt
 
 SEPARATOR = "\n\n---\n\n"
 MAX_LEVELS = 6               # bezpiecznik dla reduce hierarchicznego
@@ -26,8 +26,8 @@ MAP_RATIO = 0.20             # map: streszczenie ~20% tokenów bloku transkryptu
 REDUCE_RATIO = 0.50          # reduce: łączy już skrócone streszczenia, więc ściska mniej
 MIN_WORDS, MAX_WORDS = 120, 500
 TOKENS_PER_WORD = 1.4        # angielski, tokenizer Qwena (przybliżenie)
+TOKENS_PER_WORD_OTHER = 2.2  # inne języki (np. polski) - dłuższe słowa, więcej tokenów na słowo
 HARD_LIMIT_FACTOR = 2.0      # num_predict = cel × 2 (model nie trzyma się limitów słów dokładnie)
-PART_TOKENS = int(MAX_WORDS * TOKENS_PER_WORD * HARD_LIMIT_FACTOR) + 64   # maks. limit kroku map/reduce
 PROMPT_MARGIN = 32           # zapas na rozbieżności tokenizera
 MIN_BLOCK_TOKENS = 600       # mniejszy blok nie mieści nawet 3 najkrótszych streszczeń -> reduce nie zbiega
 
@@ -36,6 +36,8 @@ SYSTEM_PROMPT = (
     "Use only the information in the provided text; do not invent facts or interpret beyond it. "
     "Refer to the source turns in the format [turns X–Y]."
 )
+# z wymuszonym językiem: nagłówki sekcji i "Not discussed." też mają być przetłumaczone
+TRANSLATE_NOTE = " Translate the section headings and fixed phrases given in the instructions into that language too."
 
 MAP_TASK = (
     "Summarise this part of the session (turns {range}) in at most {words} words, as bullet points. Cover: "
@@ -51,15 +53,31 @@ FROM_CHUNKS = "Below is the transcript of a psychotherapy session (turns {range}
 FROM_SUMMARIES = "Below are chronological partial summaries of one psychotherapy session (turns {range}). "
 FOCUS_NOTE = "\nPay particular attention to: {focus}."
 
+# nagłówki sekcji wariantu "full" i fraza dla pustej sekcji, per język (wynik language_name);
+# język spoza słownika: angielskie nagłówki + TRANSLATE_NOTE (model tłumaczy sam)
+SECTIONS = {
+    "English": (["Reason for the session", "Main topics", "Client's state and emotions",
+                 "Therapist's interventions", "Agreements and next steps"], "Not discussed."),
+    "Polish": (["Powód sesji", "Główne tematy", "Stan i emocje klienta",
+                "Interwencje terapeuty", "Ustalenia i kolejne kroki"], "Nie poruszono."),
+}
+
+
+def final_task(variant: str, lang: str | None) -> str:
+    """Instrukcja finału dla wariantu z nagłówkami w danym języku (placeholdery {range}/{words} zostają)."""
+    headings, not_discussed = SECTIONS.get(lang or "English", SECTIONS["English"])
+    return (LENGTHS[variant]["task"].replace("<HEADINGS>", "\n".join(f"## {h}" for h in headings))
+            .replace("<NOT_DISCUSSED>", not_discussed))
+
+
 # warianty końcowego podsumowania: words = cel w prompcie, tokens = twardy limit odpowiedzi (num_predict)
 LENGTHS = {
     "full": {
         "words": 600,
         "tokens": max(config.LLM_ANSWER_RESERVE, 1536),
-        "task": ("Write the final summary of the session in Markdown, at most {words} words, with these sections:\n"
-                 "## Reason for the session\n## Main topics\n## Client's state and emotions\n"
-                 "## Therapist's interventions\n## Agreements and next steps\n"
-                 "Keep turn references. If a section has no information, write 'Not discussed.'"),
+        "task": ("Write the final summary of the session in Markdown, at most {words} words, with these sections "
+                 "(use these headings exactly as written):\n<HEADINGS>\n"
+                 "Keep turn references. If a section has no information, write '<NOT_DISCUSSED>'"),
     },
     "brief": {
         "words": 80,
@@ -141,12 +159,16 @@ def overlap_warnings(payloads: list[dict]) -> list[str]:
 # --- map-reduce ------------------------------------------------------------------
 def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=None, focus: str | None = None,
               max_block_tokens: int | None = None, num_ctx: int = config.LLM_NUM_CTX,
-              length: str = "full", log=None) -> dict:
+              length: str = "full", language: str | None = None, think: bool = False, log=None) -> dict:
     """payloads: chunki jednej sesji w kolejności chronologicznej.
     length: "full" (Markdown w sekcjach, ~600 słów), "brief" (3-5 zdań) — patrz LENGTHS — albo "all":
             wspólny map-reduce i osobny finał dla każdego wariantu (wynik w "summaries").
     formatter: payloads -> tekst (domyślnie llm.format_context; z tematami: integration.format_context_with_topics).
     max_block_tokens: zmniejsza budżet bloku (np. żeby wymusić map-reduce do testów).
+    language: język streszczeń ("pl", "en", "Polish", ...) — wszystkie kroki map/reduce i finał;
+              None = bez wymuszania (model zwykle pisze po angielsku, bo instrukcje są po angielsku).
+    think: rozumowanie qwena w każdym wywołaniu; każdy limit odpowiedzi rośnie o LLM_THINK_RESERVE
+           (o tyle też maleje budżet bloku), myślenie z kroków trafia do steps[*]["thinking"] / "thinking".
     log: opcjonalna funkcja str -> None (np. print, logger.info) — postęp kolejnych kroków."""
     if not payloads:
         raise ValueError("Brak chunków do podsumowania")
@@ -155,46 +177,54 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
     tok = get_tokenizer()
     fmt = formatter or format_context
     focus_note = FOCUS_NOTE.format(focus=focus) if focus else ""
+    lang = language_name(language)
+    system = system_prompt(SYSTEM_PROMPT, language) + (TRANSLATE_NOTE if lang and lang not in SECTIONS else "")
+    tokens_per_word = TOKENS_PER_WORD if lang in (None, "English") else TOKENS_PER_WORD_OTHER
+    part_tokens = int(MAX_WORDS * tokens_per_word * HARD_LIMIT_FACTOR) + 64   # maks. limit kroku map/reduce
+    think_extra = config.LLM_THINK_RESERVE if think else 0
+    finals_cfg = {v: {**cfg, "tokens": max(cfg["tokens"], int(cfg["words"] * tokens_per_word * HARD_LIMIT_FACTOR))}
+                  for v, cfg in LENGTHS.items()}
 
     if length != "all" and length not in LENGTHS:
         raise ValueError(f"Nieznana długość '{length}' — dostępne: {', '.join(LENGTHS)}, all")
     variants = list(LENGTHS) if length == "all" else [length]
-    final_tokens = max(LENGTHS[v]["tokens"] for v in variants)
+    final_tokens = max(finals_cfg[v]["tokens"] for v in variants)
 
     # budżet na tekst w jednym wywołaniu: okno - najdłuższa odpowiedź (finał albo map/reduce)
     # - prompt systemowy - najdłuższa instrukcja (po wszystkich wariantach finału)
-    final_tasks = [prefix + LENGTHS[v]["task"] for v in variants for prefix in (FROM_SUMMARIES, FROM_CHUNKS)]
+    final_tasks = [prefix + final_task(v, lang) for v in variants for prefix in (FROM_SUMMARIES, FROM_CHUNKS)]
     longest_task = max((MAP_TASK, REDUCE_TASK, *final_tasks), key=lambda t: tok.count(t))
-    overhead = (tok.count(SYSTEM_PROMPT) + tok.count(longest_task + focus_note)
+    overhead = (tok.count(system) + tok.count(longest_task + focus_note)
                 + TEMPLATE_OVERHEAD + PROMPT_MARGIN)
-    budget = num_ctx - max(final_tokens, PART_TOKENS) - overhead
+    budget = num_ctx - max(final_tokens, part_tokens) - think_extra - overhead
     if max_block_tokens:
         budget = min(budget, max_block_tokens)
     if budget < MIN_BLOCK_TOKENS:
         raise ValueError(f"Budżet bloku {budget} tokenów jest za mały — minimum {MIN_BLOCK_TOKENS}, żeby blok "
                          f"zmieścił kilka streszczeń (każde ≥ {MIN_WORDS} słów) i reduce zbiegał "
-                         f"(num_ctx={num_ctx}, max_block_tokens={max_block_tokens})")
+                         f"(num_ctx={num_ctx}, max_block_tokens={max_block_tokens}, think={think})")
     sep = tok.count(SEPARATOR)
 
     def target(items: list[dict], ratio: float) -> tuple[int, int]:
         """(docelowa liczba słów, twardy limit tokenów odpowiedzi) dla bloku wejść."""
-        words = int(sum(it["tokens"] for it in items) * ratio / TOKENS_PER_WORD)
+        words = int(sum(it["tokens"] for it in items) * ratio / tokens_per_word)
         words = max(MIN_WORDS, min(MAX_WORDS, words))
-        return words, min(PART_TOKENS, int(words * TOKENS_PER_WORD * HARD_LIMIT_FACTOR) + 64)
+        return words, min(part_tokens, int(words * tokens_per_word * HARD_LIMIT_FACTOR) + 64)
 
     stats = {"llm_calls": 0, "prompt_tokens": 0, "answer_tokens": 0}
     steps: list[dict] = []
 
-    def call(task: str, items: list[dict], num_predict: int, label: str, words: int) -> str:
+    def call(task: str, items: list[dict], num_predict: int, label: str, words: int) -> tuple[str, str | None]:
         text = SEPARATOR.join(it["text"] for it in items)
         instruction = task.format(range=_range(items), words=words)
-        messages = [{"role": "system", "content": SYSTEM_PROMPT},
+        messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"{instruction}{focus_note}\n\n{text}"}]
+        num_predict += think_extra
         est = check_prompt_fits(messages, num_ctx, reserve=num_predict)
         log(f"  {label}: tury {_range(items)}, {len(items)} wejść, ~{est} tok promptu "
             f"(cel ~{words} słów, limit odpowiedzi {num_predict} tok) …")
         t0 = time.perf_counter()
-        r = chat(messages, model=model, num_ctx=num_ctx, num_predict=num_predict)
+        r = chat(messages, model=model, num_ctx=num_ctx, num_predict=num_predict, think=think)
         stats["llm_calls"] += 1
         stats["prompt_tokens"] += r["prompt_tokens"]
         stats["answer_tokens"] += r["answer_tokens"]
@@ -203,12 +233,17 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
             + ("  [OBCIĘTA]" if r.get("truncated") else ""))
         if r.get("truncated"):
             out["warnings"].append(f"Odpowiedź dla tur {_range(items)} obcięta na limicie {num_predict} tokenów")
-        return r["answer"].strip()
+        return r["answer"].strip(), r.get("thinking")
 
     def finals(prefix: str, items: list[dict]) -> dict[str, str]:
         """Finał dla każdego wariantu z tych samych wejść (całego transkryptu albo streszczeń)."""
-        return {v: call(prefix + LENGTHS[v]["task"], items, LENGTHS[v]["tokens"], f"finał ({v})",
-                        LENGTHS[v]["words"]) for v in variants}
+        res = {}
+        for v in variants:
+            res[v], thinking = call(prefix + final_task(v, lang), items, finals_cfg[v]["tokens"], f"finał ({v})",
+                                    LENGTHS[v]["words"])
+            if thinking:
+                out["thinking"][v] = thinking
+        return res
 
     def done(method: str, levels: int, summaries: dict[str, str]) -> dict:
         log(f"Gotowe: {method}, poziomy={levels}, wywołania LLM={stats['llm_calls']}, "
@@ -222,7 +257,7 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
         return {"text": text, "first": first, "last": last, "tokens": tok.count(text) + sep}
 
     items = [item(fmt([p]), *_turn_bounds(p)) for p in payloads]
-    out = {"model": model, "length": length, "n_chunks": len(payloads), "turn_range": _range(items),
+    out = {"model": model, "length": length, "language": lang, "think": think, "thinking": {}, "n_chunks": len(payloads), "turn_range": _range(items),
            "block_budget": budget, "warnings": overlap_warnings(payloads)}
 
     total = sum(it["tokens"] for it in items)
@@ -254,10 +289,10 @@ def summarize(payloads: list[dict], model: str = config.LLM_MODEL, formatter=Non
         new = []
         for i, g in enumerate(groups, 1):
             words, limit = target(g, ratio)
-            s = call(task, g, limit, f"{name} {i}/{len(groups)}", words)
+            s, thinking = call(task, g, limit, f"{name} {i}/{len(groups)}", words)
             rng = _range(g)
             steps.append({"level": level, "turn_range": rng, "n_inputs": len(g), "target_words": words,
-                          "words": len(s.split()), "summary": s})
+                          "words": len(s.split()), "summary": s, **({"thinking": thinking} if thinking else {})})
             new.append(item(f"[turns {rng}]\n{s}", g[0]["first"], g[-1]["last"]))
         items, level = new, level + 1
 

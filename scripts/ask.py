@@ -9,6 +9,7 @@ Wejście sesji jak w API:
     python -m scripts.ask "What drugs does he use?" --file data/annomi_64.json --skip-ingest --show-prompt
     python -m scripts.ask "What does he say about his friends?" --session-id 64 --topic friends
     python -m scripts.ask "How has his drug use changed?" --client-id 1 -m hybrid -k 8 --neighbors 1
+    python -m scripts.ask "Dlaczego pacjentka przyszła na terapię?" --file data/pl_session_1.json -l pl
 """
 import argparse
 import sys
@@ -42,6 +43,8 @@ def main():
     ret.add_argument("--fusion", default="client", choices=["client", "server"], help="przy hybrid")
     ret.add_argument("--neighbors", type=int, default=0, help="dołącz N sąsiednich chunków z każdej strony")
     ret.add_argument("--model", default=config.LLM_MODEL)
+    ret.add_argument("-l", "--language", help='język odpowiedzi: kod ("pl", "en", ...) albo nazwa; domyślnie bez wymuszania')
+    ret.add_argument("--think", action="store_true", help="włącz rozumowanie qwena (wolniej, więcej tokenów)")
     ret.add_argument("--show-prompt", action="store_true", help="pokaż pełny prompt (z tekstem fragmentów)")
     args = ap.parse_args()
 
@@ -89,7 +92,11 @@ def print_result(out: dict) -> None:
         for m in out["messages"]:
             print(f"\n[{m['role']}]\n{m['content']}")
 
-    header(f"ODPOWIEDŹ  {out.get('model', '')}")
+    if out.get("thinking"):
+        header("MYŚLENIE")
+        print(out["thinking"])
+
+    header(f"ODPOWIEDŹ  {out.get('model', '')}" + ("  (think)" if out.get("think") else ""))
     print(out["answer"] if out.get("answer") is not None else out.get("detail"))
 
     if out.get("answer") is not None:

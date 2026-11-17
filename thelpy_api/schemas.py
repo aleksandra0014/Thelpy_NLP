@@ -59,6 +59,12 @@ class SearchRequest(BaseModel):
     topic: Optional[str] = Field(None, description=TOPIC_HELP)
 
 
+THINK_HELP = ("tryb rozumowania qwena (think): zwykle lepsze odpowiedzi, ale wolniej i więcej tokenów; "
+              "rezerwa odpowiedzi rośnie o LLM_THINK_RESERVE, myślenie zwracane w polu thinking")
+LANGUAGE_HELP = ('język odpowiedzi: kod ("pl", "en", "de", ...) albo nazwa ("Polish"); puste = bez wymuszania '
+                 '(model zwykle odpowiada w języku pytania / instrukcji)')
+
+
 def _blank_to_none(v):
     """Swagger (/docs) wysyła puste "" i {} dla nieużywanych pól — traktuj je jak niepodane."""
     return None if v in ("", {}) or (isinstance(v, str) and not v.strip()) else v
@@ -118,9 +124,11 @@ class AskRequest(SessionSource):
     fusion: Fusion = Field("client", description="hybrid: RRF liczone lokalnie albo w Qdrancie")
     neighbors: int = Field(0, ge=0, description="dołącz N sąsiednich chunków z każdej strony trafienia")
     model: str = config.LLM_MODEL
+    language: Optional[str] = Field(None, description=LANGUAGE_HELP)
+    think: bool = Field(False, description=THINK_HELP)
     include_prompt: bool = Field(False, description="zwróć pełny prompt (messages)")
 
-    @field_validator("client_id", "role", "date_from", "date_to", mode="before")
+    @field_validator("client_id", "role", "date_from", "date_to", "language", mode="before")
     @classmethod
     def _empty_filter(cls, v):
         return _blank_to_none(v)
@@ -133,11 +141,13 @@ class SummarizeSessionRequest(SingleSessionSource):
         "full", description="full: Markdown w 5 sekcjach (~600 słów) z odwołaniami do tur; brief: 3-5 zdań "
                             "(~80 słów); all: oba — map-reduce raz, osobny finał na wariant (pole summaries)")
     focus: Optional[str] = Field(None, description="na czym skupić podsumowanie, np. \"client's motivation\"")
+    language: Optional[str] = Field(None, description=LANGUAGE_HELP)
+    think: bool = Field(False, description=THINK_HELP)
     max_block_tokens: Optional[int] = Field(None, ge=600, description="zmniejsza blok map (wymusza map-reduce); "
                                             "zwykle zostaw puste, do testów np. 1500")
     include_steps: bool = Field(True, description="zwróć streszczenia cząstkowe z każdego poziomu")
 
-    @field_validator("focus", mode="before")
+    @field_validator("focus", "language", mode="before")
     @classmethod
     def _empty_focus(cls, v):
         return None if isinstance(v, str) and not v.strip() else v

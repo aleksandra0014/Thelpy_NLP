@@ -28,6 +28,7 @@ LLM_MODEL = _env("LLM_MODEL", "qwen3.5:4b")
 LLM_NUM_CTX = int(_env("LLM_NUM_CTX", "8192"))          # okno kontekstu Ollamy (prompt + odpowiedź)
 LLM_TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.2"))
 LLM_ANSWER_RESERVE = int(_env("LLM_ANSWER_RESERVE", "1024"))  # tokeny zostawione na odpowiedź
+LLM_THINK_RESERVE = int(_env("LLM_THINK_RESERVE", "2048"))    # dodatkowe tokeny na rozumowanie przy think=true
 
 TOKENIZER_NAME = _env("TOKENIZER_NAME", "BAAI/bge-m3")
 

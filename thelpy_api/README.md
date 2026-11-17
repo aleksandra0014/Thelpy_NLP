@@ -288,6 +288,8 @@ ma swoją pozycję w rankingu i score (sąsiedzi są oznaczeni jako kontekst).
 | `fusion` | `client` | przy `hybrid`: RRF lokalnie albo w Qdrancie |
 | `neighbors` | `0` | sąsiednie chunki jako dodatkowy kontekst |
 | `model` | `LLM_MODEL` z `.env` | model Ollamy |
+| `think` | `false` | tryb rozumowania qwena: wolniej i więcej tokenów; rezerwa odpowiedzi + `LLM_THINK_RESERVE` (2048), myślenie w polu `thinking` |
+| `language` | — | język odpowiedzi: kod (`"pl"`, `"en"`, …) albo nazwa (`"Polish"`); puste = bez wymuszania |
 | `include_prompt` | `false` | zwróć też pełny prompt (`messages`) |
 
 ```bash
@@ -346,6 +348,8 @@ Szczegółowy opis algorytmu (budżety, pakowanie, długości, prompty, ostrzeż
 | `model` | `LLM_MODEL` | model Ollamy |
 | `length` | `full` | `full`: Markdown w 5 sekcjach, ok. 600 słów, z odwołaniami do tur; `brief`: 3–5 zdań, ok. 80 słów; `all`: oba, map-reduce tylko raz (wynik w `summaries`) |
 | `focus` | — | na czym się skupić, np. `"client's motivation to change"` (dopisywane do każdego promptu) |
+| `think` | `false` | rozumowanie qwena w każdym kroku; limity odpowiedzi + `LLM_THINK_RESERVE`, przez co bloki map są mniejsze; myślenie w `thinking` (finał) i `steps[*].thinking` |
+| `language` | — | język podsumowania (wszystkie kroki map/reduce i finał, łącznie z nagłówkami sekcji): `"pl"`, `"en"`, … albo nazwa; puste = bez wymuszania |
 | `max_block_tokens` | — | zmniejsza blok map (min. 600), np. 1500, żeby wymusić map-reduce do testów; zwykle zostaw puste |
 | `include_steps` | `true` | zwróć streszczenia cząstkowe każdego poziomu |
 
