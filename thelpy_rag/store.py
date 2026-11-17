@@ -24,6 +24,15 @@ PAYLOAD_INDEXES = [
     ("added_at", models.PayloadSchemaType.DATETIME),
 ]
 
+# kolekcja bazy wiedzy (thelpy_rag/kb.py)
+KB_PAYLOAD_INDEXES = [
+    ("doc_name", models.PayloadSchemaType.KEYWORD),
+    ("title", models.PayloadSchemaType.KEYWORD),
+    ("source_url", models.PayloadSchemaType.KEYWORD),
+    ("section_index", models.PayloadSchemaType.INTEGER),
+    ("added_at", models.PayloadSchemaType.DATETIME),
+]
+
 
 def get_client() -> QdrantClient:
     return QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY, timeout=120)
@@ -39,7 +48,8 @@ def point_id(chunk_id: str) -> str:
 
 # 2. Zmiana modelu embeddingów (inny wymiar) wymaga --recreate, bo kolekcja ma wymiar ustawiony na stałe przy tworzeniu.
 
-def create_collection(client: QdrantClient, name: str, dim: int, recreate: bool = False) -> bool:
+def create_collection(client: QdrantClient, name: str, dim: int, recreate: bool = False,
+                      payload_indexes: list = PAYLOAD_INDEXES) -> bool:
     """Tworzy kolekcję z wektorem dense + rzadkim BM25. Zwraca True, jeśli utworzono."""
     if client.collection_exists(name):
         if not recreate:
@@ -51,7 +61,7 @@ def create_collection(client: QdrantClient, name: str, dim: int, recreate: bool 
         vectors_config={config.DENSE_VECTOR: models.VectorParams(size=dim, distance=models.Distance.COSINE)},
         sparse_vectors_config={config.SPARSE_VECTOR: models.SparseVectorParams(modifier=models.Modifier.IDF)},
     )
-    for field, schema in PAYLOAD_INDEXES:
+    for field, schema in payload_indexes:
         client.create_payload_index(name, field_name=field, field_schema=schema)
     return True
 

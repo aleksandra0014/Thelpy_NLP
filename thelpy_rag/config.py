@@ -71,6 +71,13 @@ STRATEGIES = {
 }
 
 
+# --- baza wiedzy (thelpy_rag/kb.py) --------------------------------------------
+# osobna kolekcja bez prefiksu COLLECTION_PREFIX, żeby nie mieszała się z kolekcjami strategii sesji
+KB_COLLECTION = _env("KB_COLLECTION", "knowledge")
+KB_CHUNK_TOKENS = int(_env("KB_CHUNK_TOKENS", "400"))    # maks. tokenów w chunku (akapity sklejane do tej granicy)
+KB_CHUNK_OVERLAP = int(_env("KB_CHUNK_OVERLAP", "64"))   # overlap przy cięciu akapitu dłuższego niż KB_CHUNK_TOKENS
+
+
 def collection_name(strategy: str) -> str:
     return f"{COLLECTION_PREFIX}_{strategy}"
 

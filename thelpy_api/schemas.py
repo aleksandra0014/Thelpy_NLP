@@ -171,6 +171,73 @@ class SessionKeywordsRequest(SingleSessionSource):
         return None if isinstance(v, str) and not v.strip() else v
 
 
+# --- baza wiedzy (thelpy_rag/kb.py) --------------------------------------------
+class KbSectionIn(BaseModel):
+    title: Optional[str] = Field(None, description="tytuł sekcji (doklejany do tekstu przy embeddingu)")
+    text: str = Field(..., min_length=1, description="treść sekcji; akapity oddzielone pustą linią")
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _empty_title(cls, v):
+        return _blank_to_none(v)
+
+
+class KbDocumentIn(BaseModel):
+    title: str = Field(..., min_length=1)
+    source_url: Optional[str] = Field(None, description="adres źródła (URL, DOI, ISBN, ...)")
+    doc_name: Optional[str] = Field(None, description="identyfikator dokumentu do filtrowania i nadpisywania; "
+                                                      "domyślnie title")
+    sections: list[KbSectionIn] = Field(..., min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict, description="dodatkowe pola payloadu (np. author, year)")
+
+    @field_validator("source_url", "doc_name", mode="before")
+    @classmethod
+    def _empty_fields(cls, v):
+        return _blank_to_none(v)
+
+
+class KbIngestRequest(BaseModel):
+    """Wgrywa dokumenty do kolekcji bazy wiedzy (KB_COLLECTION). Ponowne wgranie dokumentu o tym samym
+    doc_name zastępuje wszystkie jego stare fragmenty."""
+    documents: list[KbDocumentIn] = Field(..., min_length=1)
+    max_tokens: int = Field(config.KB_CHUNK_TOKENS, ge=32, le=8192,
+                            description="maks. tokenów w chunku; akapity sklejane do tej granicy")
+    overlap: int = Field(config.KB_CHUNK_OVERLAP, ge=0,
+                         description="overlap (tokeny) przy cięciu akapitu dłuższego niż max_tokens")
+    recreate: bool = Field(False, description="UWAGA: usuwa całą kolekcję bazy wiedzy i tworzy ją od nowa")
+    dry_run: bool = Field(False, description="tylko podział na chunki, bez embeddingów i zapisu")
+    show: int = Field(0, ge=0, description="przy dry_run: zwróć N pierwszych chunków każdego dokumentu")
+
+    @model_validator(mode="after")
+    def _overlap_lt_max(self):
+        if self.overlap >= self.max_tokens:
+            raise ValueError("overlap musi być mniejszy niż max_tokens")
+        return self
+
+
+SCORE_THRESHOLD_HELP = ("odrzuć trafienia ze score poniżej progu; skala zależy od trybu: dense = cosinus 0–1 "
+                        "(np. 0.5), bm25 = suma wag BM25×IDF (bez górnej granicy), hybrid = RRF Σ 1/(RRF_K+rank) "
+                        "(maks. ≈ 0.033 przy RRF_K=60)")
+
+
+class KbSearchRequest(BaseModel):
+    """Wyszukiwanie w bazie wiedzy (ten sam Retriever co /search)."""
+    query: str = Field(..., min_length=1)
+    k: int = Field(5, ge=1, le=100)
+    mode: Mode = "hybrid"
+    fusion: Fusion = Field("client", description="hybrid: RRF liczone lokalnie albo w Qdrancie")
+    documents: Optional[list[str]] = Field(None, description="szukaj tylko w tych dokumentach (doc_name); "
+                                                             "lista: GET /kb/documents")
+    score_threshold: Optional[float] = Field(None, description=SCORE_THRESHOLD_HELP)
+
+    @field_validator("documents", mode="before")
+    @classmethod
+    def _empty_docs(cls, v):
+        if isinstance(v, list):
+            v = [d for d in v if isinstance(d, str) and d.strip()] or None
+        return _blank_to_none(v)
+
+
 # --- benchmark / evaluate ----------------------------------------------------
 class BenchmarkRequest(BaseModel):
     """scripts/benchmark_session.py"""

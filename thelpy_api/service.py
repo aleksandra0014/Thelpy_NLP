@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from thelpy_rag import config
+from thelpy_rag import kb
 from thelpy_rag import keywords as kw
 from thelpy_rag.chunking import chunk_session, get_tokenizer
 from thelpy_rag.embeddings import OllamaEmbedder
@@ -25,7 +26,7 @@ from thelpy_rag.loader import iter_session_files, load_session, session_from_dic
 from thelpy_rag.pipeline import resolve_strategy
 from thelpy_rag.search import Hit, Retriever, build_context, build_filter
 from thelpy_rag.sparse import BM25Encoder
-from thelpy_rag.store import create_collection, delete_session, get_client, upsert_chunks
+from thelpy_rag.store import KB_PAYLOAD_INDEXES, create_collection, delete_session, get_client, upsert_chunks
 from thelpy_rag.summarize import fetch_chunks, summarize
 from thelpy_topics import integration, taxonomy
 from thelpy_topics import annotate as topic_annotate
@@ -300,6 +301,100 @@ def search(req: schemas.SearchRequest, res: Resources) -> dict:
 
 
 # --- wejście sesji (wspólne dla ask / summarize_session / session_keywords) --------
+# --- baza wiedzy (thelpy_rag/kb.py) ----------------------------------------------
+def kb_ingest(req: schemas.KbIngestRequest, res: Resources) -> dict:
+    name = config.KB_COLLECTION
+    created = False
+    if not req.dry_run:
+        if req.recreate or not res.client.collection_exists(name):
+            created = create_collection(res.client, name, res.embedder.dimension(), recreate=req.recreate,
+                                        payload_indexes=KB_PAYLOAD_INDEXES)
+
+    warnings = [] if get_tokenizer().exact else ["brak tokenizera modelu — rozmiary w tokenach są przybliżone"]
+    docs = []
+    for d in req.documents:
+        doc = kb.KbDocument(title=d.title, source_url=d.source_url, doc_name=d.doc_name, metadata=d.metadata,
+                            sections=[kb.KbSection(text=s.text, title=s.title) for s in d.sections])
+        chunks = kb.chunk_document(doc, req.max_tokens, req.overlap)
+        if not chunks:
+            raise ValueError(f"Dokument '{doc.name}' nie ma żadnego tekstu")
+        sizes = [c.payload["n_tokens"] for c in chunks]
+        row = {"doc_name": doc.name, "title": doc.title, "sections": len(doc.sections), "chunks": len(chunks),
+               "tokens": {"mean": round(statistics.mean(sizes)), "min": min(sizes), "max": max(sizes)}}
+        if req.dry_run:
+            row["preview"] = [{k: c.payload[k] for k in ("section_index", "section_title", "chunk_index",
+                                                         "n_tokens", "text")} for c in chunks[:req.show]]
+        else:
+            texts = [c.embed_text for c in chunks]
+            dense = res.embedder.embed_documents(texts)
+            sparse = [res.bm25.encode_document(t) for t in texts]
+            kb.delete_document(res.client, name, doc.name)
+            row["points"] = kb.upsert_kb(res.client, name, chunks, dense, sparse)
+            log.info("KB: %s — %d fragmentów", doc.name, row["points"])
+        docs.append(row)
+    return {"collection": name, "collection_created": created, "dry_run": req.dry_run,
+            "max_tokens": req.max_tokens, "overlap": req.overlap, "warnings": warnings, "documents": docs}
+
+
+KB_HIT_FIELDS = ["doc_name", "title", "source_url", "section_index", "section_title", "chunk_index", "n_tokens"]
+
+
+def kb_search(req: schemas.KbSearchRequest, res: Resources) -> dict:
+    name = config.KB_COLLECTION
+    if not res.client.collection_exists(name):
+        raise LookupError(f"Kolekcja {name} nie istnieje — najpierw POST /kb/ingest")
+    kw_ = {"fusion": req.fusion} if req.mode == "hybrid" else {}
+    hits = res.retriever.search(name, req.query, req.mode, req.k, kb.doc_filter(req.documents), **kw_)
+    if req.score_threshold is not None:
+        hits = [h for h in hits if h.score >= req.score_threshold]
+    out = [{"id": h.id, "score": h.score, "ranks": h.ranks,
+            **{f: h.payload.get(f) for f in KB_HIT_FIELDS}, "text": h.payload.get("text"),
+            "metadata": {k: v for k, v in h.payload.items() if k not in KB_HIT_FIELDS + ["text", "added_at"]}}
+           for h in hits]
+    return {"collection": name, "mode": req.mode, "documents": req.documents,
+            "score_threshold": req.score_threshold, "count": len(out), "hits": out}
+
+
+def kb_documents(res: Resources) -> dict:
+    """Lista dokumentów w bazie wiedzy (scroll po metadanych, bez tekstu i wektorów)."""
+    name = config.KB_COLLECTION
+    if not res.client.collection_exists(name):
+        raise LookupError(f"Kolekcja {name} nie istnieje — najpierw POST /kb/ingest")
+    docs: dict[str, dict] = {}
+    offset = None
+    while True:
+        points, offset = res.client.scroll(name, limit=1024, offset=offset, with_vectors=False,
+                                           with_payload=["doc_name", "title", "source_url", "section_index",
+                                                         "n_tokens", "added_at"])
+        for pt in points:
+            p = pt.payload
+            d = docs.setdefault(p["doc_name"], {"doc_name": p["doc_name"], "title": p.get("title"),
+                                                "source_url": p.get("source_url"), "added_at": p.get("added_at"),
+                                                "_sections": set(), "chunks": 0, "tokens": 0})
+            d["_sections"].add(p.get("section_index"))
+            d["chunks"] += 1
+            d["tokens"] += p.get("n_tokens") or 0
+        if offset is None:
+            break
+    rows = []
+    for d in docs.values():
+        d["sections"] = len(d.pop("_sections"))
+        rows.append(d)
+    rows.sort(key=lambda d: d["doc_name"])
+    return {"collection": name, "count": len(rows), "documents": rows}
+
+
+def kb_delete_document(doc_name: str, res: Resources) -> dict:
+    name = config.KB_COLLECTION
+    if not res.client.collection_exists(name):
+        raise LookupError(f"Kolekcja {name} nie istnieje")
+    n = res.client.count(name, count_filter=kb.doc_filter([doc_name]), exact=True).count
+    if not n:
+        raise LookupError(f"Nie ma dokumentu '{doc_name}' w {name}")
+    kb.delete_document(res.client, name, doc_name)
+    return {"collection": name, "doc_name": doc_name, "deleted_points": n}
+
+
 def resolve_source(req: schemas.SessionSource, res: Resources) -> tuple[str | None, str, bool]:
     """(Wgranie) sesji -> (session_id | None, collection, ingested).
 

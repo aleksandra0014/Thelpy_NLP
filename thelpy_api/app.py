@@ -26,7 +26,7 @@ from fastapi.routing import APIRoute
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from starlette.background import BackgroundTask
 
-from thelpy_rag import config
+from thelpy_rag import config, kb
 
 from . import schemas, service
 
@@ -282,6 +282,80 @@ def summarize_session_upload(form: Annotated[SummarizeSessionUpload, Form(media_
 def session_keywords_upload(form: Annotated[SessionKeywordsUpload, Form(media_type=MULTIPART)], request: Request):
     """To samo co /session-keywords, ale sesja jako załączony plik .json."""
     return service.session_keywords(from_upload(schemas.SessionKeywordsRequest, form), res(request))
+
+
+# --- baza wiedzy (thelpy_rag/kb.py) ----------------------------------------------
+@app.post("/kb/ingest", tags=["knowledge"])
+def kb_ingest(body: schemas.KbIngestRequest, request: Request):
+    """Wgrywa dokumenty (tytuł, źródło, sekcje) do kolekcji bazy wiedzy; tworzy ją, jeśli nie istnieje.
+    Sekcje są dzielone po akapitach do `max_tokens`. Ponowne wgranie dokumentu o tym samym `doc_name`
+    zastępuje jego stare fragmenty."""
+    return service.kb_ingest(body, res(request))
+
+
+KB_TEXT_SUFFIXES = {".md", ".markdown", ".txt"}
+
+
+def kb_documents_from_upload(f: UploadFile, source_url: Optional[str]) -> list[dict]:
+    """Plik -> lista dokumentów w formacie KbDocumentIn.
+    .json: jeden dokument, lista dokumentów albo {"documents": [...]};
+    .md / .markdown / .txt: jeden dokument, sekcje z nagłówków Markdowna (kb.parse_markdown)."""
+    name = f.filename or "upload"
+    suffix = Path(name).suffix.lower()
+    if suffix == ".json":
+        data = read_json_upload(f)
+        docs = data.get("documents", [data]) if isinstance(data, dict) else data
+        if not isinstance(docs, list):
+            raise HTTPException(400, f"{name}: oczekiwano dokumentu, listy albo {{\"documents\": [...]}}")
+        return docs
+    if suffix in KB_TEXT_SUFFIXES:
+        try:
+            text = f.file.read().decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise HTTPException(400, f"{name}: plik nie jest w UTF-8 ({e})")
+        title, sections = kb.parse_markdown(text, fallback_title=Path(name).stem)
+        if not sections:
+            raise HTTPException(400, f"{name}: plik jest pusty")
+        return [{"title": title, "doc_name": Path(name).stem, "source_url": source_url,
+                 "sections": [{"title": s.title, "text": s.text} for s in sections]}]
+    raise HTTPException(400, f"{name}: nieobsługiwany typ pliku (.json, .md, .markdown, .txt)")
+
+
+@app.post("/kb/ingest/upload", tags=["knowledge"])
+def kb_ingest_upload(request: Request,
+                     files: list[UploadFile] = File(..., description="pliki .json (dokumenty jak w /kb/ingest) "
+                                                    "albo .md / .markdown / .txt (sekcje z nagłówków #)"),
+                     source_url: Optional[str] = Form(None, description="adres źródła dla plików .md / .txt "
+                                                      "(w .json podawany w dokumencie)"),
+                     max_tokens: int = Form(config.KB_CHUNK_TOKENS), overlap: int = Form(config.KB_CHUNK_OVERLAP),
+                     recreate: bool = Form(False), dry_run: bool = Form(False), show: int = Form(0)):
+    """To samo co /kb/ingest, ale z plikami wysłanymi jako multipart/form-data.
+    Dla .md / .txt: tytuł = pierwszy nagłówek `#` (albo nazwa pliku), `doc_name` = nazwa pliku bez rozszerzenia,
+    każdy nagłówek zaczyna nową sekcję."""
+    source_url = source_url.strip() if source_url and source_url.strip() else None
+    documents = [d for f in files for d in kb_documents_from_upload(f, source_url)]
+    body = schemas.KbIngestRequest(documents=documents, max_tokens=max_tokens, overlap=overlap,
+                                   recreate=recreate, dry_run=dry_run, show=show)
+    return service.kb_ingest(body, res(request))
+
+
+@app.post("/kb/search", tags=["knowledge"])
+def kb_search(body: schemas.KbSearchRequest, request: Request):
+    """Wyszukiwanie w bazie wiedzy: dense / bm25 / hybrid, opcjonalnie tylko w wybranych dokumentach
+    (`documents`) i z progiem `score_threshold`."""
+    return service.kb_search(body, res(request))
+
+
+@app.get("/kb/documents", tags=["knowledge"])
+def kb_documents(request: Request):
+    """Dokumenty w bazie wiedzy: doc_name, tytuł, źródło, liczba sekcji / fragmentów / tokenów."""
+    return service.kb_documents(res(request))
+
+
+@app.delete("/kb/documents/{doc_name}", tags=["knowledge"])
+def kb_delete_document(doc_name: str, request: Request):
+    """Usuwa wszystkie fragmenty jednego dokumentu z bazy wiedzy."""
+    return service.kb_delete_document(doc_name, res(request))
 
 
 # --- ewaluacja ------------------------------------------------------------------

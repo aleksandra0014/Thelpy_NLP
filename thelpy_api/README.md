@@ -19,6 +19,7 @@ i zwraca wynik jako JSON zamiast wypisywać go w terminalu.
 8. [Tematy](#8-tematy)
 9. [Błędy](#9-błędy)
 10. [Typowy przebieg](#10-typowy-przebieg)
+11. [Baza wiedzy](#11-baza-wiedzy): `/kb/ingest`, `/kb/ingest/upload`, `/kb/search`, `/kb/documents`
 
 ---
 
@@ -61,6 +62,11 @@ jest zamontowane jako `/app/data`, więc podajesz je tak samo.
 | `POST /session-keywords` | keywordy sesji: słownik + wolne frazy, bez LLM | `session_keywords.py` |
 | `POST /benchmark-session` | benchmark pytań do jednej sesji (JSON lub Excel) | `benchmark_session.py` |
 | `POST /evaluate` | metryki wyszukiwania dla strategii × trybów | `evaluate.py` |
+| `POST /kb/ingest` | wgrywa dokumenty wiedzy (tytuł, źródło, sekcje) do kolekcji `knowledge` | — |
+| `POST /kb/ingest/upload` | to samo z plikami `.json` / `.md` / `.txt` (multipart) | — |
+| `POST /kb/search` | wyszukuje fragmenty bazy wiedzy (filtr po dokumentach, próg score) | — |
+| `GET /kb/documents` | lista dokumentów w bazie wiedzy | — |
+| `DELETE /kb/documents/{doc_name}` | usuwa jeden dokument z bazy wiedzy | — |
 
 ---
 
@@ -549,4 +555,114 @@ curl -X POST $API/ask -H "$H" \
 # 5. benchmark do Excela
 curl -X POST $API/benchmark-session -H "$H" \
   -d '{"session": "64", "benchmark_path": "data/benchamrk_064.json", "xlsx": true}' -o benchmark_64.xlsx
+```
+
+---
+
+## 11. Baza wiedzy
+
+Osobna kolekcja Qdranta z wiedzą psychoterapeutyczną (artykuły, podręczniki, wytyczne), niezależna od
+sesji. Nazwa: `KB_COLLECTION` (domyślnie `knowledge`, bez prefiksu `thelpy_`, więc nie pojawia się
+w `GET /collections`). Ma te same wektory co kolekcje sesji (dense + BM25), więc wyszukiwanie
+używa tego samego `Retriever` (dense / bm25 / hybrid z RRF). Kod: `thelpy_rag/kb.py`.
+
+### `POST /kb/ingest`
+
+| Pole | Domyślnie | Opis |
+|---|---|---|
+| `documents` | — | lista dokumentów (min. 1), format niżej |
+| `max_tokens` | `KB_CHUNK_TOKENS` = 400 | maks. tokenów w jednym fragmencie |
+| `overlap` | `KB_CHUNK_OVERLAP` = 64 | overlap w tokenach przy cięciu za długiego akapitu (< `max_tokens`) |
+| `recreate` | `false` | **usuwa całą kolekcję** bazy wiedzy i tworzy ją od nowa |
+| `dry_run` | `false` | tylko podział na fragmenty, bez embeddingów i zapisu |
+| `show` | `0` | przy `dry_run`: zwróć N pierwszych fragmentów każdego dokumentu |
+
+Dokument:
+
+```json
+{
+  "title": "CBT for insomnia",
+  "source_url": "https://example.org/cbt-i",
+  "doc_name": "cbt-i",
+  "metadata": {"author": "...", "year": 2019},
+  "sections": [
+    {"title": "Stimulus control", "text": "Pierwszy akapit...\n\nDrugi akapit..."},
+    {"title": "Sleep hygiene", "text": "..."}
+  ]
+}
+```
+
+- `doc_name` — identyfikator dokumentu do filtrowania i nadpisywania; domyślnie `title`.
+- `metadata` — dowolne dodatkowe pola payloadu (nie nadpisują pól systemowych).
+
+**Chunkowanie.** Sekcja jest dzielona na akapity (pusta linia). Akapity są sklejane w jeden fragment,
+dopóki mieszczą się w `max_tokens`. Akapit dłuższy niż `max_tokens` jest cięty oknem tokenowym
+z `overlap`, zawsze na granicy słowa. Do embeddingu i BM25 doklejany jest nagłówek
+`"<title> — <tytuł sekcji>"`, żeby krótkie fragmenty miały kontekst; w payloadzie `text` zostaje sam tekst.
+
+**Nadpisywanie.** ID punktu to uuid5 z `kb::<doc_name>::<nr sekcji>::<nr fragmentu>`, a przed zapisem
+usuwane są wszystkie stare fragmenty dokumentu. Ponowne wgranie dokumentu o tym samym `doc_name`
+zastępuje go w całości, także gdy nowa wersja ma mniej sekcji.
+
+Kolekcja jest tworzona przy pierwszym wgraniu (z indeksami `doc_name`, `title`, `source_url`,
+`section_index`, `added_at`).
+
+### `POST /kb/ingest/upload`
+
+To samo co `/kb/ingest`, ale dokumenty jako pliki (`multipart/form-data`, pole `files`, można kilka naraz).
+Pozostałe pola formularza: `max_tokens`, `overlap`, `recreate`, `dry_run`, `show` oraz `source_url`.
+
+| Plik | Jak jest czytany |
+|---|---|
+| `.json` | jeden dokument, lista dokumentów albo `{"documents": [...]}` (format jak w `/kb/ingest`) |
+| `.md`, `.markdown`, `.txt` | jeden dokument: tytuł = pierwszy nagłówek `# ...` (bez niego nazwa pliku), `doc_name` = nazwa pliku bez rozszerzenia, `source_url` z formularza; każdy nagłówek (`##`, `###`, ...) zaczyna nową sekcję, tekst przed pierwszym nagłówkiem to sekcja bez tytułu; plik bez nagłówków = jedna sekcja |
+
+Inne typy plików (np. PDF) zwracają `400`. Pliki muszą być w UTF-8.
+
+```bash
+curl -X POST $API/kb/ingest/upload -F files=@cbt-i.md -F files=@mi.json \
+  --form-string source_url=https://example.org/cbt-i
+```
+
+### `POST /kb/search`
+
+| Pole | Domyślnie | Opis |
+|---|---|---|
+| `query` | — | zapytanie |
+| `k` | `5` | liczba trafień (1–100) |
+| `mode` | `hybrid` | `dense`, `bm25` albo `hybrid` |
+| `fusion` | `client` | tylko przy `hybrid`, jak w `/search` |
+| `documents` | — | szukaj tylko w tych dokumentach (lista `doc_name`, nazwy z `GET /kb/documents`) |
+| `score_threshold` | — | odrzuć trafienia ze `score` poniżej progu |
+
+Każde trafienie zawiera `score`, `ranks` (przy `hybrid` z `fusion=client`), `doc_name`, `title`,
+`source_url`, `section_index`, `section_title`, `chunk_index`, `n_tokens`, `text` i `metadata`.
+
+**`score` i `score_threshold`.** `score` jest zwracany zawsze; `score_threshold` tylko odcina słabe
+trafienia (może ich być mniej niż `k`). Skala zależy od trybu:
+
+| Tryb | `score` | Przykładowy próg |
+|---|---|---|
+| `dense` | podobieństwo cosinusowe, 0–1 | ok. 0.5 |
+| `bm25` | suma wag BM25 × IDF, bez górnej granicy | zależy od danych |
+| `hybrid` | RRF `Σ 1/(RRF_K + rank)`, maks. ≈ 0.033 przy `RRF_K=60` | mało intuicyjny; lepiej `dense` |
+
+### `GET /kb/documents`, `DELETE /kb/documents/{doc_name}`
+
+Lista dokumentów (`doc_name`, `title`, `source_url`, `added_at`, liczba sekcji, fragmentów i tokenów)
+oraz usunięcie wszystkich fragmentów jednego dokumentu (`404`, gdy go nie ma).
+
+### Przykład
+
+```bash
+API=localhost:8000; H='Content-Type: application/json'
+
+curl -X POST $API/kb/ingest -H "$H" -d '{"documents": [{"title": "CBT for insomnia", "doc_name": "cbt-i",
+  "source_url": "https://example.org/cbt-i",
+  "sections": [{"title": "Sleep hygiene", "text": "Keep a regular schedule...\n\nAvoid caffeine..."}]}]}'
+
+curl $API/kb/documents
+
+curl -X POST $API/kb/search -H "$H" \
+  -d '{"query": "how to treat insomnia", "mode": "dense", "documents": ["cbt-i"], "score_threshold": 0.5}'
 ```
